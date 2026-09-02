@@ -7,7 +7,7 @@ const pdfWorker = require.resolve("pdfjs-dist/build/pdf.worker.min.mjs");
 await rm("dist", { recursive: true, force: true });
 await mkdir("dist", { recursive: true });
 await build({ entryPoints: ["src/background/index.ts"], outfile: "dist/background.js", bundle: true, format: "esm", target: "chrome122" });
-await build({ entryPoints: ["src/content/index.ts", "src/options/index.ts"], outdir: "dist", entryNames: "[name]", bundle: true, format: "iife", target: "chrome122", loader: { ".css": "text" } });
+await build({ entryPoints: { content: "src/content/index.ts", options: "src/options/index.ts" }, outdir: "dist", bundle: true, format: "iife", target: "chrome122", loader: { ".css": "text" } });
 const manifest = JSON.parse(await readFile("public/manifest.json", "utf8"));
 if (process.env.SIDECHAT_E2E === "1") manifest.host_permissions = ["https://api.example.test/*"];
 await writeFile("dist/manifest.json", `${JSON.stringify(manifest, null, 2)}\n`);

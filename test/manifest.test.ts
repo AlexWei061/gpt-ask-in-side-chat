@@ -15,4 +15,19 @@ describe("release manifest", () => {
     ]);
     expect(manifest).not.toHaveProperty("host_permissions");
   });
+
+  it("emits the bundles referenced by the manifest", async () => {
+    const files = await Promise.all(
+      ["background.js", "content.js", "options.js"].map(async (file) => {
+        try {
+          await readFile(`dist/${file}`);
+          return file;
+        } catch {
+          return null;
+        }
+      }),
+    );
+
+    expect(files).toEqual(["background.js", "content.js", "options.js"]);
+  });
 });
