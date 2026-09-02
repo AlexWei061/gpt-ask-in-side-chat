@@ -1,7 +1,11 @@
 import { readFile } from "node:fs/promises";
-import { describe, expect, it } from "vitest";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { beforeAll, describe, expect, it } from "vitest";
+const run = promisify(execFile);
 
 describe("release manifest", () => {
+  beforeAll(async () => { await run(process.execPath, ["scripts/build.mjs"]); });
   it("uses MV3 and the minimum fixed permissions", async () => {
     const manifest = JSON.parse(await readFile("public/manifest.json", "utf8"));
 
@@ -17,8 +21,9 @@ describe("release manifest", () => {
   });
 
   it("emits the bundles referenced by the manifest", async () => {
-    const files = await Promise.all(
-      ["background.js", "content.js", "options.js"].map(async (file) => {
+    const files = ["background.js", "content.js", "options.js", "manifest.json", "options.html", "pdf.worker.min.mjs", "icons/icon-16.png", "icons/icon-32.png", "icons/icon-48.png", "icons/icon-128.png"];
+    const present = await Promise.all(
+      files.map(async (file) => {
         try {
           await readFile(`dist/${file}`);
           return file;
@@ -28,6 +33,6 @@ describe("release manifest", () => {
       }),
     );
 
-    expect(files).toEqual(["background.js", "content.js", "options.js"]);
+    expect(present).toEqual(files);
   });
 });
