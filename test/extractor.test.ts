@@ -9,9 +9,16 @@ describe("ChatGptPageAdapter", () => {
     const result = new ChatGptPageAdapter(document).extractConversation();
     expect(result.messages).toHaveLength(2);
     expect(result.messages[0]).toMatchObject({ index: 0, role: "user", content: "Explain this API." });
-    expect(result.messages[1]?.content).toContain("```ts\nconst safe = true;\n```");
-    expect(result.messages[1]?.content).toContain("| Key | Value |");
-    expect(result.messages[1]?.content).not.toContain("Copy");
+    expect(result.messages[1]?.content).toBe([
+      "Use a service worker.",
+      "```ts",
+      "const safe = true;",
+      "```",
+      "| Key | Value |",
+      "| --- | --- |",
+      "| mode | safe |",
+      "Docs",
+    ].join("\n"));
     expect(result.messages[1]?.links).toEqual([{ label: "Docs", href: "https://example.com/docs" }]);
     expect(result.certain).toBe(true);
   });
@@ -19,5 +26,72 @@ describe("ChatGptPageAdapter", () => {
   it("marks extraction uncertain when roles are missing", () => {
     document.querySelectorAll("article")[1]?.removeAttribute("data-message-author-role");
     expect(new ChatGptPageAdapter(document).extractConversation().certain).toBe(false);
+  });
+
+  it("preserves visible block boundaries while skipping hidden content", () => {
+    document.body.innerHTML = `<main><article data-message-author-role="assistant"><div class="markdown">
+      <p>First paragraph.</p><p>Second paragraph.</p>
+      <ul><li>First item</li><li>Second item<br>continued</li></ul>
+      <span hidden>Hidden attribute</span><span style="display: none">Hidden display</span>
+      <span style="visibility: hidden">Hidden visibility</span><span aria-hidden="true">Hidden aria</span>
+      <span>Visible.</span>
+    </div></article></main>`;
+
+    expect(new ChatGptPageAdapter(document).extractConversation().messages[0]?.content).toBe([
+      "First paragraph.",
+      "Second paragraph.",
+      "First item",
+      "Second item",
+      "continued",
+      "Visible.",
+    ].join("\n"));
+  });
+
+  it("uses a safe code fence and escapes table syntax", () => {
+    document.body.innerHTML = `<main><article data-message-author-role="assistant"><div class="markdown">
+      <pre><code class="language-ts">const fence = \"\`\`\`\";</code></pre>
+      <table><tbody><tr><td>Pipe|header</td><td>Line<br>break</td></tr><tr><td>A|B</td><td>ok</td></tr></tbody></table>
+    </div></article></main>`;
+
+    expect(new ChatGptPageAdapter(document).extractConversation().messages[0]?.content).toBe([
+      "````ts",
+      "const fence = \"\`\`\`\";",
+      "````",
+      "| Pipe\\|header | Line break |",
+      "| --- | --- |",
+      "| A\\|B | ok |",
+    ].join("\n"));
+  });
+
+  it("skips hidden code descendants without changing the visible code", () => {
+    document.body.innerHTML = `<main><article data-message-author-role="assistant"><div class="markdown">
+      <pre><code class="language-ts">const shown = true;<span hidden>const secret = true;</span></code></pre>
+    </div></article></main>`;
+
+    expect(new ChatGptPageAdapter(document).extractConversation().messages[0]?.content).toBe([
+      "```ts",
+      "const shown = true;",
+      "```",
+    ].join("\n"));
+  });
+
+  it("marks an empty conversation uncertain", () => {
+    document.body.innerHTML = "<main></main>";
+    expect(new ChatGptPageAdapter(document).extractConversation()).toEqual({ messages: [], certain: false });
+  });
+
+  it("reads only valid conversation URLs", () => {
+    const adapter = new ChatGptPageAdapter(document);
+    expect(adapter.getConversationId("https://chatgpt.com/c/conversation-123")).toBe("conversation-123");
+    expect(adapter.getConversationId("https://chatgpt.com/share/conversation-123")).toBeNull();
+    expect(adapter.getConversationId("not a URL")).toBeNull();
+  });
+
+  it("finds the containing message from elements and text nodes", () => {
+    const adapter = new ChatGptPageAdapter(document);
+    const paragraph = document.querySelector("article p");
+    expect(adapter.findMessageElement(paragraph)).toBe(document.querySelector("article"));
+    expect(adapter.findMessageElement(paragraph?.firstChild ?? null)).toBe(document.querySelector("article"));
+    expect(adapter.findMessageElement(null)).toBeNull();
   });
 });

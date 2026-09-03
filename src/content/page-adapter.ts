@@ -25,7 +25,7 @@ export class ChatGptPageAdapter {
   }
 
   extractConversation(): ExtractionResult {
-    const candidates = Array.from(this.document.querySelectorAll("main article"));
+    const candidates = Array.from(this.document.querySelectorAll<HTMLElement>("main article"));
     const messages: MainMessage[] = [];
     let certain = candidates.length > 0;
 
@@ -36,7 +36,7 @@ export class ChatGptPageAdapter {
         continue;
       }
 
-      const serialized = serializeMessage(article.querySelector(".markdown") ?? article);
+      const serialized = serializeMessage(article.querySelector<HTMLElement>(".markdown") ?? article);
       if (!serialized.content) certain = false;
       messages.push({ index: messages.length, role: role as ChatRole, ...serialized });
     }
