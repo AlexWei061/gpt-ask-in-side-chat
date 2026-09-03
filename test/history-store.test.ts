@@ -105,6 +105,21 @@ describe("HistoryStore", () => {
     await expect(store.get("a")).resolves.toEqual(record("a", "Alpha answer"));
   });
 
+  test("reads an existing history key without generating a replacement", async () => {
+    const databaseName = createDatabaseName();
+    const original = createStore(databaseName);
+    const saved = record("a", "Alpha answer");
+    await original.put(saved);
+    await original.close();
+
+    const reopened = createStore(databaseName);
+    const generateKey = vi.spyOn(crypto.subtle, "generateKey").mockRejectedValueOnce(new Error("key generation failed"));
+
+    await expect(reopened.get("a")).resolves.toEqual(saved);
+    expect(generateKey).not.toHaveBeenCalled();
+    generateKey.mockRestore();
+  });
+
   test("rejects a stored record with an incompatible schema version", async () => {
     const databaseName = createDatabaseName();
     const store = createStore(databaseName);

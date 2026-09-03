@@ -18,11 +18,18 @@ export class HistoryStore {
   private historyKey: Promise<CryptoKey> | undefined;
 
   constructor(databaseName = "side-chat-companion") {
+    let connection: IDBPDatabase<HistoryDatabase> | undefined;
     this.database = openDB<HistoryDatabase>(databaseName, 1, {
       upgrade(database) {
         database.createObjectStore("meta");
         database.createObjectStore("histories");
       },
+      blocking() {
+        connection?.close();
+      },
+    }).then((database) => {
+      connection = database;
+      return database;
     });
   }
 
@@ -70,12 +77,15 @@ export class HistoryStore {
 
   private async loadOrCreateHistoryKey(): Promise<CryptoKey> {
     const database = await this.database;
+    const existing = await database.get("meta", "history-key");
+    if (existing) return existing;
+
     const candidate = await createHistoryKey();
     const transaction = database.transaction("meta", "readwrite");
-    const existing = await transaction.store.get("history-key");
-    if (existing) {
+    const persisted = await transaction.store.get("history-key");
+    if (persisted) {
       await transaction.done;
-      return existing;
+      return persisted;
     }
 
     await transaction.store.put(candidate, "history-key");
