@@ -43,7 +43,6 @@ export interface SideChatRecord {
 export interface SendPayload {
   conversationId: string;
   mainMessages: MainMessage[];
-  sideMessages: SideMessage[];
   quote: QuoteReference;
   question: string;
   attachments: PreparedAttachment[];

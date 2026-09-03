@@ -1,5 +1,5 @@
 import type { ExtensionErrorCode } from "./errors";
-import type { ProviderConfig, SendPayload, SideChatRecord } from "./types";
+import type { MainMessage, PreparedAttachment, ProviderConfig, QuoteReference, SendPayload, SideChatRecord } from "./types";
 
 export type RuntimeRequest =
   | { type: "settings:get" }
@@ -47,6 +47,44 @@ export function isRuntimeRequest(value: unknown): value is RuntimeRequest {
 }
 
 export function isStreamClientMessage(value: unknown): value is StreamClientMessage {
-  if (!isObject(value) || typeof value.type !== "string" || typeof value.requestId !== "string") return false;
-  return value.type === "abort" || (value.type === "start" && isObject(value.payload));
+  if (!isObject(value) || typeof value.type !== "string" || !isNonEmptyString(value.requestId)) return false;
+  return value.type === "abort" || (value.type === "start" && isSendPayload(value.payload));
+}
+
+export function isSendPayload(value: unknown): value is SendPayload {
+  if (!isObject(value) || !hasOnlyKeys(value, ["conversationId", "mainMessages", "quote", "question", "attachments", "compressOldContext"])) return false;
+  return isNonEmptyString(value.conversationId)
+    && Array.isArray(value.mainMessages) && value.mainMessages.every(isMainMessage)
+    && isQuoteReference(value.quote)
+    && typeof value.question === "string" && value.question.trim().length > 0
+    && Array.isArray(value.attachments) && value.attachments.every(isPreparedAttachment)
+    && typeof value.compressOldContext === "boolean";
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, keys: string[]): boolean {
+  return Object.keys(value).every((key) => keys.includes(key));
+}
+
+function isMainMessage(value: unknown): value is MainMessage {
+  return isObject(value)
+    && hasOnlyKeys(value, ["index", "role", "content", "links"])
+    && typeof value.index === "number" && Number.isInteger(value.index) && value.index >= 0
+    && (value.role === "user" || value.role === "assistant")
+    && typeof value.content === "string"
+    && Array.isArray(value.links)
+    && value.links.every((link) => isObject(link) && hasOnlyKeys(link, ["label", "href"]) && typeof link.label === "string" && typeof link.href === "string");
+}
+
+function isQuoteReference(value: unknown): value is QuoteReference {
+  return isObject(value)
+    && hasOnlyKeys(value, ["text", "sourceRole", "sourceMessageIndex"])
+    && typeof value.text === "string"
+    && (value.sourceRole === "user" || value.sourceRole === "assistant")
+    && typeof value.sourceMessageIndex === "number" && Number.isInteger(value.sourceMessageIndex) && value.sourceMessageIndex >= 0;
+}
+
+function isPreparedAttachment(value: unknown): value is PreparedAttachment {
+  if (!isObject(value) || typeof value.name !== "string" || typeof value.sourceMessageIndex !== "number" || !Number.isInteger(value.sourceMessageIndex) || value.sourceMessageIndex < 0) return false;
+  if (value.kind === "text") return hasOnlyKeys(value, ["kind", "name", "sourceMessageIndex", "text"]) && typeof value.text === "string";
+  return value.kind === "image" && hasOnlyKeys(value, ["kind", "name", "sourceMessageIndex", "dataUrl"]) && typeof value.dataUrl === "string";
 }

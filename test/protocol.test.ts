@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isRuntimeRequest, isStreamClientMessage } from "../src/shared/protocol";
+import { isRuntimeRequest, isSendPayload, isStreamClientMessage } from "../src/shared/protocol";
 import { t } from "../src/shared/i18n";
 
 describe("runtime protocol guards", () => {
@@ -12,8 +12,10 @@ describe("runtime protocol guards", () => {
   it("accepts only typed stream start and abort messages", () => {
     expect(isStreamClientMessage({ type: "abort", requestId: "r1" })).toBe(true);
     expect(isStreamClientMessage({ type: "abort" })).toBe(false);
-    expect(isStreamClientMessage({ type: "abort", requestId: "" })).toBe(true);
-    expect(isStreamClientMessage({ type: "start", requestId: "r2", payload: {} })).toBe(true);
+    expect(isStreamClientMessage({ type: "abort", requestId: "" })).toBe(false);
+    expect(isStreamClientMessage({ type: "start", requestId: "r2", payload: validPayload() })).toBe(true);
+    expect(isStreamClientMessage({ type: "start", requestId: "r2", payload: { ...validPayload(), sideMessages: [] } })).toBe(false);
+    expect(isStreamClientMessage({ type: "start", requestId: "r2", payload: { ...validPayload(), attachments: [{ kind: "image", name: "x", sourceMessageIndex: 0 }] } })).toBe(false);
     expect(isStreamClientMessage({ type: "start", requestId: "r3", payload: "invalid" })).toBe(false);
     expect(isStreamClientMessage({ type: "start", requestId: "r4" })).toBe(false);
   });
@@ -24,6 +26,29 @@ describe("runtime protocol guards", () => {
   });
   it("accepts any object config when saving settings", () => {
     expect(isRuntimeRequest({ type: "settings:save", config: {}, privacyAccepted: true })).toBe(true);
+  });
+});
+
+function validPayload() {
+  return {
+    conversationId: "conversation-1",
+    mainMessages: [{ index: 0, role: "user", content: "hello", links: [{ label: "site", href: "https://example.com" }] }],
+    quote: { text: "hello", sourceRole: "user", sourceMessageIndex: 0 },
+    question: "What does it mean?",
+    attachments: [{ kind: "text", name: "note.txt", sourceMessageIndex: 0, text: "note" }],
+    compressOldContext: false,
+  };
+}
+
+describe("send payload guard", () => {
+  it("requires validated nested request context and rejects extra client history", () => {
+    expect(isSendPayload(validPayload())).toBe(true);
+    expect(isSendPayload({ ...validPayload(), conversationId: "" })).toBe(false);
+    expect(isSendPayload({ ...validPayload(), mainMessages: [{ index: -1, role: "user", content: "x", links: [] }] })).toBe(false);
+    expect(isSendPayload({ ...validPayload(), quote: { text: "x", sourceRole: "system", sourceMessageIndex: 0 } })).toBe(false);
+    expect(isSendPayload({ ...validPayload(), question: " \n " })).toBe(false);
+    expect(isSendPayload({ ...validPayload(), attachments: [{ kind: "text", name: "x", sourceMessageIndex: 0 }] })).toBe(false);
+    expect(isSendPayload({ ...validPayload(), sideMessages: [] })).toBe(false);
   });
 });
 
