@@ -15,17 +15,17 @@ import {
 import { ExtensionError, type ExtensionErrorCode } from "../shared/errors";
 import { isRuntimeRequest, isStreamClientMessage, type RuntimeRequest, type RuntimeResponse, type StreamServerMessage } from "../shared/protocol";
 
-const history = new HistoryStore();
+export const historyStore = new HistoryStore();
 const chatService = new ChatService({
-  history,
+  history: historyStore,
   loadSettings: loadInternalSettings,
   stream: (args) => streamChatCompletion({ ...args, fetcher: fetch }),
 });
 
 void restrictStorageAccess();
 
-chrome.runtime.onInstalled.addListener(() => {
-  void chrome.runtime.openOptionsPage();
+chrome.runtime.onInstalled.addListener((details) => {
+  if (details.reason === "install") void chrome.runtime.openOptionsPage();
 });
 
 chrome.action.onClicked.addListener(() => {
@@ -57,7 +57,7 @@ chrome.runtime.onConnect.addListener((port) => {
       else post(port, { type: "delta", requestId: message.requestId, text: event.text });
     }).then(
       (record) => post(port, { type: "done", requestId: message.requestId, record }),
-      (error: unknown) => post(port, { type: "error", requestId: message.requestId, error: normalizeError(error) }),
+      (error: unknown) => post(port, { type: "error", requestId: message.requestId, error: normalizeStreamError(error) }),
     ).finally(() => {
       controllers.delete(message.requestId);
     });
@@ -85,9 +85,9 @@ async function handleRuntimeRequest(request: RuntimeRequest): Promise<RuntimeRes
         await savePanelWidth(width);
         return { ok: true, value: { panelWidth: width } };
       }
-      case "history:load": return { ok: true, value: await history.get(request.conversationId) };
-      case "history:clear": await history.delete(request.conversationId); return { ok: true };
-      case "history:clear-all": await history.clear(); return { ok: true };
+      case "history:load": return { ok: true, value: await historyStore.get(request.conversationId) };
+      case "history:clear": await historyStore.delete(request.conversationId); return { ok: true };
+      case "history:clear-all": await historyStore.clear(); return { ok: true };
       default: return { ok: false, error: { code: "STORAGE_FAILED", message: "Unsupported runtime request." } };
     }
   } catch (error) {
@@ -106,4 +106,9 @@ function post(port: chrome.runtime.Port, message: StreamServerMessage): void {
 function normalizeError(error: unknown): { code: ExtensionErrorCode; message: string; retryable: boolean } {
   if (error instanceof ExtensionError) return { code: error.code, message: error.message, retryable: error.retryable };
   return { code: "STORAGE_FAILED", message: "The extension could not complete the request.", retryable: false };
+}
+
+function normalizeStreamError(error: unknown): { code: ExtensionErrorCode; message: string; retryable: boolean } {
+  if (error instanceof ExtensionError) return { code: error.code, message: error.message, retryable: error.retryable };
+  return { code: "NETWORK_FAILED", message: "The AI provider connection failed.", retryable: true };
 }

@@ -78,23 +78,76 @@ export class ChatService {
   }
 
   private async compress(payload: SendPayload, sideMessages: SideMessage[], settings: InternalSettings & { config: NonNullable<InternalSettings["config"]>; apiKey: string }, signal: AbortSignal): Promise<string> {
+    const tokenBudget = Math.floor(settings.config.contextWindowTokens * 0.35);
+    const contentBudget = tokenBudget - estimateTokens(JSON.stringify(compressionMessages(""))) - 1;
+    if (!Number.isFinite(contentBudget) || contentBudget <= 0) {
+      throw new ExtensionError("PROTOCOL_FAILED", "The provider context window cannot support context compression.");
+    }
     const values = [
       ...payload.mainMessages.map((message) => JSON.stringify(message)),
       ...sideMessages.map((message) => JSON.stringify(message)),
-    ];
-    const chunks = partitionForCompression(values, Math.floor(settings.config.contextWindowTokens * 0.35));
+    ].flatMap((value) => splitForCompression(value, contentBudget));
+    const chunks = partitionForCompression(values, contentBudget)
+      .flatMap((chunk) => splitForProviderCompression(chunk.join("\n"), tokenBudget));
     const summaries: string[] = [];
     for (const chunk of chunks) {
       let fromDeltas = "";
       const result = await this.dependencies.stream({
         url: chatCompletionsUrl(settings.config.baseUrl), apiKey: settings.apiKey, model: settings.config.model, signal,
-        messages: [{ role: "system", content: compressionSystemPrompt }, { role: "user", content: chunk.join("\n") }],
+        messages: compressionMessages(chunk),
         onDelta: (text) => { fromDeltas += text; },
       });
-      summaries.push(fromDeltas || result);
+      const summary = fromDeltas || result;
+      if (!summary.trim()) {
+        throw new ExtensionError("PROTOCOL_FAILED", "The provider returned an empty context compression result.", true);
+      }
+      summaries.push(summary);
     }
     return summaries.join("\n\n");
   }
+
+}
+
+function splitForCompression(value: string, tokenBudget: number): string[] {
+  if (estimateTokens(value) <= tokenBudget) return [value];
+  const segments: string[] = [];
+  let segment = "";
+  let tokens = 0;
+  for (const character of value) {
+    const characterTokens = character.codePointAt(0)! > 0x7f ? 1 : 0.25;
+    if (segment && tokens + characterTokens > tokenBudget) {
+      segments.push(segment);
+      segment = "";
+      tokens = 0;
+    }
+    segment += character;
+    tokens += characterTokens;
+  }
+  if (segment) segments.push(segment);
+  return segments;
+}
+
+function compressionMessages(content: string): ChatCompletionMessage[] {
+  return [{ role: "system", content: compressionSystemPrompt }, { role: "user", content }];
+}
+
+function splitForProviderCompression(value: string, tokenBudget: number): string[] {
+  const segments: string[] = [];
+  let segment = "";
+  for (const character of value) {
+    const candidate = segment + character;
+    if (estimateTokens(JSON.stringify(compressionMessages(candidate))) > tokenBudget) {
+      if (!segment) {
+        throw new ExtensionError("PROTOCOL_FAILED", "The provider context window cannot support context compression.");
+      }
+      segments.push(segment);
+      segment = character;
+    } else {
+      segment = candidate;
+    }
+  }
+  if (segment) segments.push(segment);
+  return segments;
 }
 
 function emptyRecord(conversationId: string): SideChatRecord {

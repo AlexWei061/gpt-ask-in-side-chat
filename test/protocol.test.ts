@@ -24,8 +24,14 @@ describe("runtime protocol guards", () => {
     expect(isRuntimeRequest({ type: "ui:set-width", width: 420 })).toBe(true);
     expect(isRuntimeRequest({ type: "ui:set-width", width: 1200 })).toBe(false);
   });
-  it("accepts any object config when saving settings", () => {
-    expect(isRuntimeRequest({ type: "settings:save", config: {}, privacyAccepted: true })).toBe(true);
+  it("accepts only complete provider configuration when saving settings", () => {
+    const config = { baseUrl: "https://api.example.com/v1", model: "model-a", contextWindowTokens: 4096, supportsImages: false };
+    expect(isRuntimeRequest({ type: "settings:save", config, privacyAccepted: true })).toBe(true);
+    expect(isRuntimeRequest({ type: "settings:save", config: {}, privacyAccepted: true })).toBe(false);
+    expect(isRuntimeRequest({ type: "settings:save", config: { ...config, model: " " }, privacyAccepted: true })).toBe(false);
+    expect(isRuntimeRequest({ type: "settings:save", config: { ...config, contextWindowTokens: 1.5 }, privacyAccepted: true })).toBe(false);
+    expect(isRuntimeRequest({ type: "settings:save", config: { ...config, supportsImages: "yes" }, privacyAccepted: true })).toBe(false);
+    expect(isRuntimeRequest({ type: "settings:save", config: { ...config, extra: true }, privacyAccepted: true })).toBe(false);
   });
 });
 

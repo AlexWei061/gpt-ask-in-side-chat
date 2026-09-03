@@ -41,7 +41,7 @@ export function isRuntimeRequest(value: unknown): value is RuntimeRequest {
     case "key:set": return isNonEmptyString(value.apiKey);
     case "ui:set-width": return typeof value.width === "number" && Number.isFinite(value.width) && value.width >= 320 && value.width <= 960;
     case "history:load": case "history:clear": return isNonEmptyString(value.conversationId);
-    case "settings:save": return isObject(value.config) && typeof value.privacyAccepted === "boolean";
+    case "settings:save": return isProviderConfig(value.config) && typeof value.privacyAccepted === "boolean";
     default: return false;
   }
 }
@@ -87,4 +87,13 @@ function isPreparedAttachment(value: unknown): value is PreparedAttachment {
   if (!isObject(value) || typeof value.name !== "string" || typeof value.sourceMessageIndex !== "number" || !Number.isInteger(value.sourceMessageIndex) || value.sourceMessageIndex < 0) return false;
   if (value.kind === "text") return hasOnlyKeys(value, ["kind", "name", "sourceMessageIndex", "text"]) && typeof value.text === "string";
   return value.kind === "image" && hasOnlyKeys(value, ["kind", "name", "sourceMessageIndex", "dataUrl"]) && typeof value.dataUrl === "string";
+}
+
+function isProviderConfig(value: unknown): value is ProviderConfig {
+  return isObject(value)
+    && hasOnlyKeys(value, ["baseUrl", "model", "contextWindowTokens", "supportsImages"])
+    && typeof value.baseUrl === "string" && value.baseUrl.trim().length > 0
+    && typeof value.model === "string" && value.model.trim().length > 0
+    && typeof value.contextWindowTokens === "number" && Number.isFinite(value.contextWindowTokens) && Number.isInteger(value.contextWindowTokens) && value.contextWindowTokens > 0
+    && typeof value.supportsImages === "boolean";
 }
