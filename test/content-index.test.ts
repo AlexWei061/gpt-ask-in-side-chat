@@ -32,7 +32,7 @@ describe("content bootstrap", () => {
   });
 
   it("loads current history", async () => {
-    privacy = true; historyRecords.set("one", { messages: [{ id: "m", role: "assistant", content: "saved", status: "complete", createdAt: "" }] });
+    privacy = true; historyRecords.set("one", { schemaVersion: 1, conversationId: "one", updatedAt: "", messages: [{ id: "m", role: "assistant", content: "saved", status: "complete", createdAt: "" }] });
     window.history.pushState({}, "", "/c/one");
     const { bootstrapPromise } = await import("../src/content/index"); await bootstrapPromise;
     expect(document.querySelector("[data-side-chat-host]")?.shadowRoot?.textContent).toContain("saved");
@@ -94,11 +94,11 @@ describe("content bootstrap", () => {
       if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: true } });
       else if (message.type === "ui:get") callback({ ok: true, value: { panelWidth: 420 } });
       else if (message.type === "history:load" && message.conversationId === "old") oldCallback = callback;
-      else if (message.type === "history:load") callback({ ok: true, value: { messages: [{ id: "new", role: "assistant", content: "NEW", status: "complete", createdAt: "" }] } }); else callback({ ok: true });
+      else if (message.type === "history:load") callback({ ok: true, value: { schemaVersion: 1, conversationId: "new", updatedAt: "", messages: [{ id: "new", role: "assistant", content: "NEW", status: "complete", createdAt: "" }] } }); else callback({ ok: true });
     };
     const { bootstrapPromise: boot } = await import("../src/content/index");
     window.history.pushState({}, "", "/c/new"); document.documentElement.append(document.createElement("i")); await Promise.resolve(); await Promise.resolve();
-    oldCallback?.({ ok: true, value: { messages: [{ id: "stale", role: "assistant", content: "STALE", status: "complete", createdAt: "" }] } }); await boot;
+    oldCallback?.({ ok: true, value: { schemaVersion: 1, conversationId: "old", updatedAt: "", messages: [{ id: "stale", role: "assistant", content: "STALE", status: "complete", createdAt: "" }] } }); await boot;
     expect(document.querySelector("[data-side-chat-host]")?.shadowRoot?.textContent).not.toContain("STALE");
     expect(document.querySelector("[data-side-chat-host]")?.shadowRoot?.textContent).toContain("NEW");
   });

@@ -8,12 +8,13 @@ import { SidePanel, type PanelSend } from "./ui/side-panel";
 type PublicSettings = { privacyAccepted: boolean };
 type UiPreferences = { panelWidth: number };
 
-function request<T>(message: unknown): Promise<T> {
+function request<T>(message: unknown, valid: (value: unknown) => value is T = ((_: unknown): _ is T => true)): Promise<T> {
   return new Promise((resolve, reject) => chrome.runtime.sendMessage(message, (response: unknown) => {
-    const result = response as RuntimeResponse<T> | undefined;
-    if (chrome.runtime.lastError || !result || typeof result !== "object" || typeof result.ok !== "boolean") return reject(new Error("The extension could not contact its background service."));
-    if (!result.ok) return reject(new Error(result.error.message));
-    resolve(result.value as T);
+    const generic = () => reject(new Error("The extension could not contact its background service."));
+    if (chrome.runtime.lastError || !response || typeof response !== "object" || typeof (response as { ok?: unknown }).ok !== "boolean") return generic();
+    const result = response as RuntimeResponse<T>;
+    if (!result.ok) return isErrorCode(result.error?.code) && typeof result.error?.message === "string" ? reject(new Error(result.error.message)) : generic();
+    return valid(result.value) ? resolve(result.value) : generic();
   }));
 }
 
@@ -23,7 +24,7 @@ export function bootstrap(): Promise<void> {
   return state[BOOTSTRAP_KEY] ?? (state[BOOTSTRAP_KEY] = bootstrapImpl());
 }
 async function bootstrapImpl(): Promise<void> {
-  if (!(await request<PublicSettings>({ type: "settings:get" })).privacyAccepted) { delete (document as Document & { [BOOTSTRAP_KEY]?: Promise<void> })[BOOTSTRAP_KEY]; return; }
+  if (!(await request<PublicSettings>({ type: "settings:get" }, isSettings)).privacyAccepted) { delete (document as Document & { [BOOTSTRAP_KEY]?: Promise<void> })[BOOTSTRAP_KEY]; return; }
   const adapter = new ChatGptPageAdapter(document);
   let stream: { port: chrome.runtime.Port; requestId: string; conversationId: string } | null = null;
   let generation = 0;
@@ -46,7 +47,7 @@ async function bootstrapImpl(): Promise<void> {
     const conversationId = adapter.getConversationId(); panel.setConversation(conversationId, []);
     if (!conversationId) return;
     try {
-      const record = await request<SideChatRecord | null>({ type: "history:load", conversationId });
+      const record = await request<SideChatRecord | null>({ type: "history:load", conversationId }, isHistory);
       if (!disposed && token === generation && adapter.getConversationId() === conversationId) panel.setMessages(record?.messages ?? []);
     } catch { if (!disposed && token === generation) panel.setNotice("Could not load side-chat history."); }
   }
@@ -63,9 +64,9 @@ async function bootstrapImpl(): Promise<void> {
     disconnectStream(); const requestId = crypto.randomUUID(); const port = chrome.runtime.connect({ name: "side-chat-stream" }); stream = { port, requestId, conversationId };
     port.onMessage.addListener((raw: unknown) => {
       const candidate = raw as { requestId?: unknown; type?: unknown } | null;
-      if (!isStreamEvent(raw)) { if (candidate?.requestId === requestId && typeof candidate.type === "string") { panel.setError({ message: "The side-chat response was invalid.", retryable: true }); disconnectStream(false); } return; }
+      if (!stream || stream.port !== port || candidate?.requestId !== stream.requestId) return;
+      if (!isStreamEvent(raw)) { if (typeof candidate.type === "string") { panel.setError({ message: "The side-chat response was invalid.", retryable: true }); disconnectStream(false); } return; }
       const event = raw;
-      if (!stream || stream.port !== port || event.requestId !== stream.requestId) return;
       if (event.type === "accepted") panel.setAccepted();
       else if (event.type === "delta") panel.appendDelta(event.text);
       else if (event.type === "done") { if (event.record.conversationId === stream.conversationId) panel.complete(event.record.messages); else panel.setError({ message: "The side-chat response was invalid.", retryable: true }); disconnectStream(false); }
@@ -75,12 +76,14 @@ async function bootstrapImpl(): Promise<void> {
     try { port.postMessage({ type: "start", requestId, payload: { conversationId, mainMessages: extraction.messages, quote: submission.quote, question: submission.question, attachments: [], compressOldContext: submission.compressOldContext } }); }
     catch { panel.setError({ message: "Could not start the side-chat request.", retryable: true }); disconnectStream(false); }
   }
-  try { panel.setWidth((await request<UiPreferences>({ type: "ui:get" })).panelWidth); } catch { panel.setError({ message: "Could not load panel preferences.", retryable: false }); }
+  try { panel.setWidth((await request<UiPreferences>({ type: "ui:get" }, isUi)).panelWidth); } catch { panel.setError({ message: "Could not load panel preferences.", retryable: false }); }
   let url = document.location.href;
   const checkNavigation = () => { if (document.location.href !== url) { url = document.location.href; void loadConversation(); } };
   const observer = new MutationObserver(checkNavigation); observer.observe(document.documentElement, { childList: true, subtree: true });
   document.defaultView?.addEventListener("popstate", checkNavigation);
-  document.defaultView?.addEventListener("pagehide", () => { disposed = true; observer.disconnect(); document.defaultView?.removeEventListener("popstate", checkNavigation); disconnectStream(); selection.destroy(); panel.destroy(); delete (document as Document & { [BOOTSTRAP_KEY]?: Promise<void> })[BOOTSTRAP_KEY]; }, { once: true });
+  const pagehide = (event: PageTransitionEvent) => { if (event.persisted) { disconnectStream(); panel.resetRequest(); return; } disposed = true; observer.disconnect(); document.defaultView?.removeEventListener("popstate", checkNavigation); document.defaultView?.removeEventListener("pagehide", pagehide); document.defaultView?.removeEventListener("pageshow", pageshow); disconnectStream(); selection.destroy(); panel.destroy(); delete (document as Document & { [BOOTSTRAP_KEY]?: Promise<void> })[BOOTSTRAP_KEY]; };
+  const pageshow = (event: PageTransitionEvent) => { if (event.persisted) void loadConversation(); };
+  document.defaultView?.addEventListener("pagehide", pagehide); document.defaultView?.addEventListener("pageshow", pageshow);
   await loadConversation();
 }
 
@@ -98,6 +101,9 @@ function isStreamEvent(value: unknown): value is StreamServerMessage {
 }
 
 function isErrorCode(value: unknown): value is ExtensionErrorCode { return typeof value === "string" && ["EXTRACTION_UNCERTAIN", "KEY_REQUIRED", "PERMISSION_REQUIRED", "AUTHENTICATION_FAILED", "RATE_LIMITED", "CONTEXT_OVERFLOW", "ATTACHMENT_FAILED", "NETWORK_FAILED", "PROTOCOL_FAILED", "STORAGE_FAILED"].includes(value); }
+function isSettings(value: unknown): value is PublicSettings { return Boolean(value && typeof value === "object" && typeof (value as PublicSettings).privacyAccepted === "boolean"); }
+function isUi(value: unknown): value is UiPreferences { return Boolean(value && typeof value === "object" && typeof (value as UiPreferences).panelWidth === "number" && Number.isFinite((value as UiPreferences).panelWidth)); }
+function isHistory(value: unknown): value is SideChatRecord | null { return value === null || isSideChatRecord(value); }
 function isQuote(value: unknown): boolean { return Boolean(value && typeof value === "object" && typeof (value as { text?: unknown }).text === "string" && ((value as { sourceRole?: unknown }).sourceRole === "user" || (value as { sourceRole?: unknown }).sourceRole === "assistant") && Number.isInteger((value as { sourceMessageIndex?: unknown }).sourceMessageIndex) && (value as { sourceMessageIndex: number }).sourceMessageIndex >= 0); }
 function isSideChatRecord(value: unknown): value is SideChatRecord {
   if (!value || typeof value !== "object") return false; const record = value as SideChatRecord;
