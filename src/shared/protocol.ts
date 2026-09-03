@@ -34,13 +34,6 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
-function isProviderConfig(value: unknown): value is ProviderConfig {
-  if (!isObject(value)) return false;
-  return typeof value.baseUrl === "string" && typeof value.model === "string" &&
-    typeof value.contextWindowTokens === "number" && Number.isFinite(value.contextWindowTokens) &&
-    typeof value.supportsImages === "boolean";
-}
-
 export function isRuntimeRequest(value: unknown): value is RuntimeRequest {
   if (!isObject(value) || typeof value.type !== "string") return false;
   switch (value.type) {
@@ -48,12 +41,12 @@ export function isRuntimeRequest(value: unknown): value is RuntimeRequest {
     case "key:set": return isNonEmptyString(value.apiKey);
     case "ui:set-width": return typeof value.width === "number" && Number.isFinite(value.width) && value.width >= 320 && value.width <= 960;
     case "history:load": case "history:clear": return isNonEmptyString(value.conversationId);
-    case "settings:save": return isProviderConfig(value.config) && typeof value.privacyAccepted === "boolean";
+    case "settings:save": return isObject(value.config) && typeof value.privacyAccepted === "boolean";
     default: return false;
   }
 }
 
 export function isStreamClientMessage(value: unknown): value is StreamClientMessage {
-  if (!isObject(value) || typeof value.type !== "string" || !isNonEmptyString(value.requestId)) return false;
+  if (!isObject(value) || typeof value.type !== "string" || typeof value.requestId !== "string") return false;
   return value.type === "abort" || (value.type === "start" && isObject(value.payload));
 }

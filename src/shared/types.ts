@@ -28,7 +28,7 @@ export interface SideMessage {
   id: string;
   role: ChatRole;
   content: string;
-  quote?: QuoteReference;
+  quote: QuoteReference;
   status: "complete" | "incomplete";
   createdAt: string;
 }
