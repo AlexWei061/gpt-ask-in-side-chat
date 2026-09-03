@@ -13,6 +13,9 @@ describe("runtime protocol guards", () => {
     expect(isStreamClientMessage({ type: "abort", requestId: "r1" })).toBe(true);
     expect(isStreamClientMessage({ type: "abort" })).toBe(false);
     expect(isStreamClientMessage({ type: "abort", requestId: "" })).toBe(true);
+    expect(isStreamClientMessage({ type: "start", requestId: "r2", payload: {} })).toBe(true);
+    expect(isStreamClientMessage({ type: "start", requestId: "r3", payload: "invalid" })).toBe(false);
+    expect(isStreamClientMessage({ type: "start", requestId: "r4" })).toBe(false);
   });
   it("accepts bounded UI preferences only", () => {
     expect(isRuntimeRequest({ type: "ui:get" })).toBe(true);
