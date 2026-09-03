@@ -1,6 +1,6 @@
 import { t } from "../shared/i18n";
 import type { QuoteReference } from "../shared/types";
-import { ChatGptPageAdapter, MESSAGE_SELECTOR } from "./page-adapter";
+import { ChatGptPageAdapter } from "./page-adapter";
 
 export function quoteFromRange(range: Range, adapter: ChatGptPageAdapter): QuoteReference | null {
   const startMessage = adapter.findMessageElement(range.startContainer);
@@ -12,9 +12,13 @@ export function quoteFromRange(range: Range, adapter: ChatGptPageAdapter): Quote
   const sourceRole = startMessage.getAttribute("data-message-author-role");
   if (sourceRole !== "user" && sourceRole !== "assistant") return null;
 
-  const sourceMessageIndex = Array.from(startMessage.ownerDocument.querySelectorAll(MESSAGE_SELECTOR)).indexOf(startMessage);
-  const message = adapter.extractConversation().messages[sourceMessageIndex];
-  if (!message || message.role !== sourceRole) return null;
+  const extraction = adapter.extractConversation();
+  if (!extraction.certain) return null;
+
+  const candidates = Array.from(startMessage.ownerDocument.querySelectorAll<HTMLElement>("main article"));
+  const sourceMessageIndex = candidates.indexOf(startMessage as HTMLElement);
+  const message = extraction.messages[sourceMessageIndex];
+  if (!message || message.index !== sourceMessageIndex || message.role !== sourceRole) return null;
 
   return { text, sourceRole, sourceMessageIndex };
 }
@@ -68,10 +72,18 @@ export class SelectionController {
 
     const rect = range.getBoundingClientRect();
     const viewportWidth = this.document.defaultView?.innerWidth ?? this.document.documentElement.clientWidth;
-    const left = Math.max(8, Math.min(rect.left, viewportWidth - this.button.offsetWidth - 8));
-    this.button.style.left = `${left}px`;
-    this.button.style.top = `${rect.bottom + 8}px`;
+    const viewportHeight = this.document.defaultView?.innerHeight ?? this.document.documentElement.clientHeight;
+    const previousVisibility = this.button.style.visibility;
+    this.button.style.visibility = "hidden";
     this.button.style.display = "block";
+    const buttonRect = this.button.getBoundingClientRect();
+    const buttonWidth = buttonRect.width || this.button.offsetWidth || 160;
+    const buttonHeight = buttonRect.height || this.button.offsetHeight || 36;
+    const left = Math.max(8, Math.min(rect.left, viewportWidth - buttonWidth - 8));
+    const top = Math.max(8, Math.min(rect.bottom + 8, viewportHeight - buttonHeight - 8));
+    this.button.style.left = `${left}px`;
+    this.button.style.top = `${top}px`;
+    this.button.style.visibility = previousVisibility;
   };
 
   private readonly handleKeydown = (event: KeyboardEvent): void => {
