@@ -106,8 +106,12 @@ describe("side panel", () => {
     const handle = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!.querySelector<HTMLElement>("[data-resize-handle]")!;
     expect(handle.getAttribute("role")).toBe("separator");
     expect(handle.tabIndex).toBe(0);
+    handle.focus(); const initial = handle.getAttribute("aria-valuenow");
     handle.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
-    expect(onResize).toHaveBeenCalledTimes(1);
+    handle.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    expect(document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!.activeElement).toBe(handle);
+    expect(handle.getAttribute("aria-valuenow")).not.toBe(initial);
+    expect(onResize).toHaveBeenCalledTimes(2);
     panel.destroy();
   });
 

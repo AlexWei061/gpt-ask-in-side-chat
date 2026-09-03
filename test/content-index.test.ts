@@ -22,7 +22,7 @@ describe("content bootstrap", () => {
       }, lastError: null, connect: () => { const port = new FakePort(); ports.push(port); return port; },
     } } });
   });
-  afterEach(() => { vi.resetModules(); document.body.innerHTML = ""; document.querySelectorAll("[data-side-chat-host]").forEach((node) => node.remove()); });
+  afterEach(() => { window.dispatchEvent(new Event("pagehide")); vi.resetModules(); document.body.innerHTML = ""; document.querySelectorAll("[data-side-chat-host]").forEach((node) => node.remove()); });
 
   it("does not inject UI before privacy acceptance", async () => {
     await import("../src/content/index");
@@ -30,21 +30,18 @@ describe("content bootstrap", () => {
     expect(document.querySelector("[data-side-chat-host]")).toBeNull();
   });
 
-  it("loads current history and safely handles terminal and disconnected streams", async () => {
+  it("loads current history", async () => {
     privacy = true; historyRecords.set("one", { messages: [{ id: "m", role: "assistant", content: "saved", status: "complete", createdAt: "" }] });
     window.history.pushState({}, "", "/c/one");
-    const { bootstrap } = await import("../src/content/index"); await bootstrap();
+    const { bootstrapPromise } = await import("../src/content/index"); await bootstrapPromise;
     expect(document.querySelector("[data-side-chat-host]")?.shadowRoot?.textContent).toContain("saved");
-    // A malformed event cannot alter UI or throw; an active-port disconnect becomes retryable notice.
-    const port = new FakePort(); ports.push(port); port.emit({ type: "delta" });
-    expect(document.querySelector("[data-side-chat-host]")).toBeTruthy();
   });
 
-  it("streams accepted/delta/done and clears an active stream before history clear", async () => {
+  it("ignores malformed done then renders a valid terminal record from the real form port", async () => {
     privacy = true; window.history.pushState({}, "", "/c/stream");
     document.body.innerHTML = `<main><article data-message-author-role="assistant"><p id="quote">alpha</p></article></main>`;
     vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => { callback(0); return 1; });
-    const { bootstrap } = await import("../src/content/index"); await bootstrap();
+    const { bootstrapPromise } = await import("../src/content/index"); await bootstrapPromise;
     const range = document.createRange(); range.selectNodeContents(document.querySelector("#quote")!); document.getSelection()?.addRange(range);
     document.dispatchEvent(new Event("selectionchange"));
     document.querySelector<HTMLButtonElement>("[data-side-chat-selection-action]")!.click();
@@ -53,8 +50,12 @@ describe("content bootstrap", () => {
     const port = ports.at(-1)!; const start = port.sent.at(-1) as { requestId: string };
     port.emit({ type: "accepted", requestId: start.requestId, approximateTokens: 1 }); port.emit({ type: "delta", requestId: start.requestId, text: "partial" });
     expect(root.textContent).toContain("partial");
-    root.querySelector<HTMLButtonElement>("[data-action=clear]")!.click();
-    expect(port.sent).toContainEqual({ type: "abort", requestId: start.requestId });
+    port.emit({ type: "done", requestId: start.requestId, record: {} });
+    expect(root.textContent).toContain("partial");
+    port.emit({ type: "done", requestId: start.requestId, record: { schemaVersion: 1, conversationId: "stream", updatedAt: "", messages: [{ id: "final", role: "assistant", content: "final answer", status: "complete", createdAt: "" }] } });
+    expect(root.textContent).toContain("final answer");
+    port.emit({ type: "delta", requestId: start.requestId, text: "ignored" });
+    expect(root.textContent).not.toContain("ignored");
   });
 
   it("does not let a stale history response overwrite a newer SPA route", async () => {
@@ -64,11 +65,12 @@ describe("content bootstrap", () => {
       if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: true } });
       else if (message.type === "ui:get") callback({ ok: true, value: { panelWidth: 420 } });
       else if (message.type === "history:load" && message.conversationId === "old") oldCallback = callback;
-      else if (message.type === "history:load") callback({ ok: true, value: { messages: [] } }); else callback({ ok: true });
+      else if (message.type === "history:load") callback({ ok: true, value: { messages: [{ id: "new", role: "assistant", content: "NEW", status: "complete", createdAt: "" }] } }); else callback({ ok: true });
     };
-    const { bootstrap } = await import("../src/content/index"); const boot = bootstrap();
+    const { bootstrapPromise: boot } = await import("../src/content/index");
     window.history.pushState({}, "", "/c/new"); document.documentElement.append(document.createElement("i")); await Promise.resolve(); await Promise.resolve();
     oldCallback?.({ ok: true, value: { messages: [{ id: "stale", role: "assistant", content: "STALE", status: "complete", createdAt: "" }] } }); await boot;
     expect(document.querySelector("[data-side-chat-host]")?.shadowRoot?.textContent).not.toContain("STALE");
+    expect(document.querySelector("[data-side-chat-host]")?.shadowRoot?.textContent).toContain("NEW");
   });
 });

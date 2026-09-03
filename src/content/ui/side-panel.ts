@@ -15,7 +15,7 @@ export class SidePanel {
     this.host = document.createElement("aside"); this.host.dataset.sideChatHost = "true"; this.root = this.host.attachShadow({ mode: "open" });
     document.documentElement.append(this.host); this.host.style.display = "none"; this.render();
   }
-  setWidth(width: number): void { this.width = this.clamp(width); this.render(); this.applyMargin(); }
+  setWidth(width: number): void { this.width = this.clamp(width); this.syncWidth(); this.applyMargin(); }
   setConversation(id: string | null, messages: SideMessage[]): void { this.conversationId = id; this.messages = messages; this.quote = null; this.draft = ""; this.error = null; this.notice = ""; this.lastSubmission = null; this.busy = false; this.accepted = false; this.stream = ""; this.render(); this.syncOpenState(); }
   setMessages(messages: SideMessage[]): void { this.messages = messages; this.stream = ""; this.render(); }
   open(quote: QuoteReference): void { this.openState = true; this.quote = quote; if (this.originalMargin === null) this.originalMargin = this.document.body.style.marginRight; this.applyMargin(); this.render(); this.syncOpenState(); this.root.querySelector<HTMLTextAreaElement>("textarea")?.focus(); }
@@ -32,6 +32,7 @@ export class SidePanel {
   private applyMargin(): void { if (this.openState) this.document.body.style.marginRight = `${this.width}px`; }
   private restoreMargin(): void { if (this.originalMargin !== null) { this.document.body.style.marginRight = this.originalMargin; this.originalMargin = null; } }
   private clamp(width: number): number { const max = Math.min(960, Math.max(320, Math.floor((this.document.defaultView?.innerWidth ?? 1920) / 2))); return Math.max(320, Math.min(max, Math.round(width))); }
+  private syncWidth(): void { const panel = this.root.querySelector<HTMLElement>(".panel"); panel?.style.setProperty("--side-chat-width", `${this.width}px`); this.root.querySelector<HTMLElement>("[data-resize-handle]")?.setAttribute("aria-valuenow", String(this.width)); }
   private render(): void {
     this.root.innerHTML = ""; const style = this.document.createElement("style"); style.textContent = sidePanelStyles; this.root.append(style);
     const panel = this.document.createElement("section"); panel.className = "panel"; panel.style.setProperty("--side-chat-width", `${this.width}px`);
@@ -48,7 +49,7 @@ export class SidePanel {
   private message(message: SideMessage): HTMLElement { const box = this.document.createElement("article"); box.className = `message ${message.role}`; if (message.quote) { const quote = this.document.createElement("div"); quote.className="quote"; quote.textContent=message.quote.text; box.append(quote); } const content = this.document.createElement("div"); content.innerHTML = renderMarkdown(message.content, this.document); box.append(content); if (message.status === "incomplete") { const marker = this.document.createElement("div"); marker.className="incomplete"; marker.textContent="Incomplete"; box.append(marker); } return box; }
   private send(payload: PanelSend): void { if (this.busy) return; this.lastSubmission = payload; this.error = null; this.notice = ""; this.stream = ""; this.busy = true; this.options.onSend(payload); this.render(); }
   private readonly down = (event: PointerEvent): void => { event.preventDefault(); this.resizing = true; this.document.addEventListener("pointermove", this.move); this.document.addEventListener("pointerup", this.up); };
-  private readonly move = (event: PointerEvent): void => { if (!this.resizing) return; this.width = this.clamp((this.document.defaultView?.innerWidth ?? 0) - event.clientX); this.render(); this.applyMargin(); };
+  private readonly move = (event: PointerEvent): void => { if (!this.resizing) return; this.width = this.clamp((this.document.defaultView?.innerWidth ?? 0) - event.clientX); this.syncWidth(); this.applyMargin(); };
   private readonly up = (): void => { if (!this.resizing) return; this.resizing=false; this.document.removeEventListener("pointermove", this.move); this.document.removeEventListener("pointerup", this.up); this.options.onResize?.(this.width); };
-  private readonly keyResize = (event: KeyboardEvent): void => { if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return; event.preventDefault(); this.width = this.clamp(this.width + (event.key === "ArrowLeft" ? 16 : -16)); this.render(); this.applyMargin(); this.options.onResize?.(this.width); };
+  private readonly keyResize = (event: KeyboardEvent): void => { if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return; event.preventDefault(); this.width = this.clamp(this.width + (event.key === "ArrowLeft" ? 16 : -16)); this.syncWidth(); this.applyMargin(); this.options.onResize?.(this.width); };
 }
