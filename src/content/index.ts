@@ -83,7 +83,7 @@ function isStreamEvent(value: unknown): value is StreamServerMessage {
   if (!value || typeof value !== "object") return false;
   const event = value as { type?: unknown; requestId?: unknown; text?: unknown; record?: unknown; error?: unknown };
   if (typeof event.requestId !== "string" || !event.requestId || typeof event.type !== "string") return false;
-  if (event.type === "accepted") return typeof (event as { approximateTokens?: unknown }).approximateTokens === "number" && Number.isFinite((event as { approximateTokens: number }).approximateTokens) && (event as { approximateTokens: number }).approximateTokens >= 0;
+  if (event.type === "accepted") return typeof (event as { approximateTokens?: unknown }).approximateTokens === "number" && Number.isFinite((event as { approximateTokens: number }).approximateTokens) && Number.isInteger((event as { approximateTokens: number }).approximateTokens) && (event as { approximateTokens: number }).approximateTokens >= 0;
   if (event.type === "delta") return typeof event.text === "string";
   if (event.type === "done") return isSideChatRecord(event.record);
   if (event.type === "error") return Boolean(event.error && typeof event.error === "object" && isErrorCode((event.error as { code?: unknown }).code) && typeof (event.error as { message?: unknown }).message === "string" && typeof (event.error as { retryable?: unknown }).retryable === "boolean");
