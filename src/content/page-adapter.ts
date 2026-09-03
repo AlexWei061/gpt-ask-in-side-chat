@@ -1,4 +1,4 @@
-import { serializeMessage } from "./extractor";
+import { isVisible, serializeMessage } from "./extractor";
 import type { ChatRole, MainMessage } from "../shared/types";
 
 export const MESSAGE_SELECTOR = "article[data-message-author-role]";
@@ -36,7 +36,13 @@ export class ChatGptPageAdapter {
         continue;
       }
 
-      const serialized = serializeMessage(article.querySelector<HTMLElement>(".markdown") ?? article);
+      const root = article.querySelector<HTMLElement>(".markdown") ?? article;
+      if (!isVisible(article) || !isVisible(root)) {
+        certain = false;
+        continue;
+      }
+
+      const serialized = serializeMessage(root);
       if (!serialized.content) certain = false;
       messages.push({ index: messages.length, role: role as ChatRole, ...serialized });
     }

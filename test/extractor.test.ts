@@ -63,6 +63,46 @@ describe("ChatGptPageAdapter", () => {
     ].join("\n"));
   });
 
+  it("escapes backslashes before table pipes", () => {
+    document.body.innerHTML = `<main><article data-message-author-role="assistant"><div class="markdown">
+      <table><tbody><tr><td>Value</td></tr><tr><td>A\\|B</td></tr></tbody></table>
+    </div></article></main>`;
+
+    expect(new ChatGptPageAdapter(document).extractConversation().messages[0]?.content).toBe([
+      "| Value |",
+      "| --- |",
+      String.raw`| A\\\|B |`,
+    ].join("\n"));
+  });
+
+  it("excludes hidden table structure and collects visible table links", () => {
+    document.body.innerHTML = `<main><article data-message-author-role="assistant"><div class="markdown">
+      <table><tbody>
+        <tr><td>Header</td><td hidden>Secret header</td></tr>
+        <tr hidden><td>Secret row</td></tr>
+        <tr><td>Value</td><td style="display: none">Secret cell</td></tr>
+        <tr><td><a href="https://example.com/table">Table Docs</a></td></tr>
+      </tbody></table>
+    </div></article></main>`;
+
+    const message = new ChatGptPageAdapter(document).extractConversation().messages[0];
+    expect(message?.content).toBe(["| Header |", "| --- |", "| Value |", "| Table Docs |"].join("\n"));
+    expect(message?.links).toEqual([{ label: "Table Docs", href: "https://example.com/table" }]);
+  });
+
+  it("marks hidden message roots and ancestors uncertain", () => {
+    const hiddenCases = [
+      `<article data-message-author-role="assistant"><div class="markdown" hidden>Hidden root</div></article>`,
+      `<div hidden><article data-message-author-role="assistant"><div class="markdown">Hidden ancestor</div></article></div>`,
+      `<article data-message-author-role="assistant" hidden><div class="markdown">Hidden article</div></article>`,
+    ];
+
+    for (const markup of hiddenCases) {
+      document.body.innerHTML = `<main>${markup}</main>`;
+      expect(new ChatGptPageAdapter(document).extractConversation()).toEqual({ messages: [], certain: false });
+    }
+  });
+
   it("skips hidden code descendants without changing the visible code", () => {
     document.body.innerHTML = `<main><article data-message-author-role="assistant"><div class="markdown">
       <pre><code class="language-ts">const shown = true;<span hidden>const secret = true;</span></code></pre>

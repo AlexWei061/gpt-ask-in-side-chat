@@ -32,10 +32,13 @@ class TextWriter {
   }
 }
 
-function isVisible(element: Element): boolean {
-  if (HIDDEN_TAGS.has(element.tagName) || element.hasAttribute("hidden") || element.getAttribute("aria-hidden") === "true") return false;
-  const style = element.ownerDocument.defaultView?.getComputedStyle(element);
-  return style?.display !== "none" && style?.visibility !== "hidden";
+export function isVisible(element: Element): boolean {
+  for (let current: Element | null = element; current; current = current.parentElement) {
+    if (HIDDEN_TAGS.has(current.tagName) || current.hasAttribute("hidden") || current.getAttribute("aria-hidden") === "true") return false;
+    const style = current.ownerDocument.defaultView?.getComputedStyle(current);
+    if (style?.display === "none" || style?.visibility === "hidden") return false;
+  }
+  return true;
 }
 
 function codeFence(code: string): string {
@@ -66,11 +69,20 @@ function visibleText(root: HTMLElement): string {
 }
 
 function tableCellText(cell: HTMLTableCellElement): string {
-  return visibleText(cell).replace(/\s*\n\s*/g, " ").replace(/\|/g, "\\|");
+  return visibleText(cell).replace(/\s*\n\s*/g, " ").replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
 }
 
-export function serializeTable(table: HTMLTableElement): string {
-  const rows = Array.from(table.rows, (row) => Array.from(row.cells, tableCellText));
+function collectTableLinks(root: Element, links: MainMessage["links"]): void {
+  if (!isVisible(root)) return;
+  if (root instanceof HTMLAnchorElement && root.hasAttribute("href")) links.push({ label: visibleText(root), href: root.href });
+  for (const child of root.children) collectTableLinks(child, links);
+}
+
+export function serializeTable(table: HTMLTableElement, links?: MainMessage["links"]): string {
+  if (links) collectTableLinks(table, links);
+  const rows = Array.from(table.rows)
+    .filter(isVisible)
+    .map((row) => Array.from(row.cells).filter(isVisible).map(tableCellText));
   const width = rows[0]?.length ?? 0;
 
   if (width === 0 || rows.some((row) => row.length !== width)) return rows.map((row) => row.join("\t")).join("\n");
@@ -100,7 +112,7 @@ function writeNode(node: Node, writer: TextWriter, collectLinks: boolean, links:
     return;
   }
   if (element.tagName === "TABLE") {
-    writer.writeLiteral(serializeTable(element as HTMLTableElement));
+    writer.writeLiteral(serializeTable(element as HTMLTableElement, collectLinks ? links : undefined));
     writer.break();
     return;
   }
@@ -113,6 +125,7 @@ function writeNode(node: Node, writer: TextWriter, collectLinks: boolean, links:
 }
 
 export function serializeMessage(root: HTMLElement): Pick<MainMessage, "content" | "links"> {
+  if (!isVisible(root)) return { content: "", links: [] };
   const links: MainMessage["links"] = [];
   const writer = new TextWriter();
   for (const child of root.childNodes) writeNode(child, writer, true, links);
