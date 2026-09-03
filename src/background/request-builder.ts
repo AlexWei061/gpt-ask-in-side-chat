@@ -41,7 +41,12 @@ export function buildChatMessages({
   const messages: ChatCompletionMessage[] = [systemMessage, { role: "user", content }];
 
   if (compressedSummary === null) {
-    messages.push(...sideMessages.map(({ role, content: sideContent }) => ({ role, content: sideContent })));
+    messages.push(...sideMessages.map(({ role, content: sideContent, status }) => ({
+      role,
+      content: role === "assistant" && status === "incomplete"
+        ? `Partial side-chat response (incomplete):\n${sideContent}`
+        : sideContent,
+    })));
   }
   messages.push({ role: "user", content: JSON.stringify({ selectedQuote: quote, question }) });
   return messages;

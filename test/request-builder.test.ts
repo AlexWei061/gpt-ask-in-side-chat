@@ -38,6 +38,16 @@ describe("buildChatMessages", () => {
     expect(JSON.parse(result[4]!.content as string)).toEqual({ selectedQuote: quote, question: "Why?" });
   });
 
+  it("labels an incomplete assistant history response while preserving its text", () => {
+    const result = messages({
+      sideMessages: [{
+        id: "s1", role: "assistant", content: "partial answer", status: "incomplete", createdAt: new Date(0).toISOString(),
+      }],
+    });
+
+    expect(result[2]!.content).toContain("Partial side-chat response (incomplete):\npartial answer");
+  });
+
   it("replaces old main and side context with an explicit compressed summary", () => {
     const result = messages({
       mainMessages: [{ index: 0, role: "user", content: "old main", links: [] }],
