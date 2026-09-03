@@ -69,7 +69,7 @@ export class SelectionController {
     this.document.defaultView?.visualViewport?.removeEventListener("resize", this.hide);
     this.button.removeEventListener("mousedown", this.handleMouseDown);
     this.button.removeEventListener("click", this.handleClick);
-    if (this.frameId !== null) this.document.defaultView?.cancelAnimationFrame(this.frameId);
+    this.hide();
     this.button.remove();
   }
 
@@ -81,8 +81,10 @@ export class SelectionController {
       return;
     }
     let refreshed = false;
-    const frameId = view.requestAnimationFrame(() => {
+    let frameId: number | null = null;
+    frameId = view.requestAnimationFrame(() => {
       refreshed = true;
+      if (this.frameId !== frameId) return;
       this.frameId = null;
       this.refreshSelection();
     });
@@ -138,6 +140,8 @@ export class SelectionController {
   }
 
   private readonly hide = (): void => {
+    if (this.frameId !== null) this.document.defaultView?.cancelAnimationFrame(this.frameId);
+    this.frameId = null;
     this.button.style.display = "none";
   };
 }

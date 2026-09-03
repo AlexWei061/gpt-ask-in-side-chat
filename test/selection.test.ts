@@ -4,6 +4,7 @@ import { ChatGptPageAdapter } from "../src/content/page-adapter";
 
 describe("selection", () => {
   const originalViewport = { width: window.innerWidth, height: window.innerHeight };
+  const originalVisualViewport = Object.getOwnPropertyDescriptor(window, "visualViewport");
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -11,6 +12,8 @@ describe("selection", () => {
       innerWidth: { configurable: true, value: originalViewport.width },
       innerHeight: { configurable: true, value: originalViewport.height },
     });
+    if (originalVisualViewport) Object.defineProperty(window, "visualViewport", originalVisualViewport);
+    else delete (window as { visualViewport?: VisualViewport }).visualViewport;
     document.getSelection()?.removeAllRanges();
     document.body.innerHTML = "";
   });
@@ -131,6 +134,29 @@ describe("selection", () => {
     controller.destroy();
   });
 
+  it("hides on visual viewport resize and removes its listener on destroy", () => {
+    const visualViewport = new EventTarget();
+    Object.defineProperty(window, "visualViewport", { configurable: true, value: visualViewport });
+    document.body.innerHTML = `<main><article data-message-author-role="assistant"><p id="a">alpha beta</p></article></main>`;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(0);
+      return 1;
+    });
+    const range = document.createRange();
+    range.selectNodeContents(document.querySelector("#a")!);
+    document.getSelection()?.addRange(range);
+    const controller = new SelectionController(document, vi.fn());
+    const button = document.querySelector<HTMLButtonElement>("[data-side-chat-selection-action]")!;
+    document.dispatchEvent(new Event("selectionchange"));
+
+    visualViewport.dispatchEvent(new Event("resize"));
+    expect(button.style.display).toBe("none");
+    controller.destroy();
+    button.style.display = "block";
+    visualViewport.dispatchEvent(new Event("resize"));
+    expect(button.style.display).toBe("block");
+  });
+
   it("limits the action width to the viewport", () => {
     const controller = new SelectionController(document, vi.fn());
     const button = document.querySelector<HTMLButtonElement>("[data-side-chat-selection-action]")!;
@@ -164,5 +190,31 @@ describe("selection", () => {
     document.dispatchEvent(new Event("selectionchange"));
     controller.destroy();
     expect(cancel).toHaveBeenCalledWith(42);
+  });
+
+  it("does not reshow after an outside dismissal cancels a pending refresh", () => {
+    document.body.innerHTML = `<main><article data-message-author-role="assistant"><p id="a">alpha beta</p></article></main>`;
+    const onAsk = vi.fn();
+    const callbacks: FrameRequestCallback[] = [];
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    const range = document.createRange();
+    range.selectNodeContents(document.querySelector("#a")!);
+    document.getSelection()?.addRange(range);
+    const controller = new SelectionController(document, onAsk);
+    const button = document.querySelector<HTMLButtonElement>("[data-side-chat-selection-action]")!;
+
+    document.dispatchEvent(new Event("selectionchange"));
+    callbacks[0]?.(0);
+    expect(button.style.display).toBe("block");
+    document.dispatchEvent(new Event("selectionchange"));
+    document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    callbacks[1]?.(0);
+
+    expect(button.style.display).toBe("none");
+    expect(onAsk).not.toHaveBeenCalled();
+    controller.destroy();
   });
 });
