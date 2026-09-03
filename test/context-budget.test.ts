@@ -3,11 +3,14 @@ import { ExtensionError } from "../src/shared/errors";
 import { assertWithinBudget, estimateTokens, partitionForCompression } from "../src/background/context-budget";
 
 describe("context budget", () => {
-  it("estimates non-ASCII text as more tokens than equivalent ASCII text", () => {
-    expect(estimateTokens("测试测试")).toBeGreaterThan(estimateTokens("test"));
+  it("uses one token per non-ASCII code point and rounds ASCII quarters up", () => {
+    expect(estimateTokens("test")).toBe(1);
+    expect(estimateTokens("测试测试")).toBe(4);
+    expect(estimateTokens("test测")).toBe(2);
   });
 
-  it("rejects approximate usage above ninety percent of the context window", () => {
+  it("allows the ninety-percent context boundary and rejects overflow", () => {
+    expect(() => assertWithinBudget(900, 1000)).not.toThrow();
     expect(() => assertWithinBudget(901, 1000)).toThrow(expect.objectContaining({ code: "CONTEXT_OVERFLOW" }));
     try {
       assertWithinBudget(901, 1000);
@@ -16,9 +19,16 @@ describe("context budget", () => {
     }
   });
 
-  it("partitions sequential strings without reordering or dropping content", () => {
+  it("splits before a sequential item would overflow the compression budget", () => {
     const parts = ["a".repeat(40), "b".repeat(40), "c".repeat(40)];
 
+    expect(partitionForCompression(parts, 15)).toEqual(parts.map((part) => [part]));
     expect(partitionForCompression(parts, 15).flat()).toEqual(parts);
+  });
+
+  it("keeps an oversized item as its own compression chunk", () => {
+    const oversized = "a".repeat(80);
+
+    expect(partitionForCompression([oversized, "b".repeat(40)], 15)).toEqual([[oversized], ["b".repeat(40)]]);
   });
 });
