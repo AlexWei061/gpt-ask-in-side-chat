@@ -18,6 +18,11 @@ class FakePort {
   postMessage(value: unknown) { this.posted.push(value); }
 }
 
+function deferred() {
+  let resolve: (() => void) | undefined;
+  return { promise: new Promise<void>((done) => { resolve = done; }), resolve: () => resolve?.() };
+}
+
 const openOptionsPage = vi.fn(async () => {});
 const localGet = vi.fn(async (..._keys: unknown[]): Promise<Record<string, unknown>> => { throw new Error("storage failed"); });
 Object.assign(globalThis, {
@@ -33,7 +38,7 @@ Object.assign(globalThis, {
 
 const payload = { conversationId: "c1", mainMessages: [{ index: 0, role: "user" as const, content: "q", links: [] }], quote: { text: "q", sourceRole: "user" as const, sourceMessageIndex: 0 }, question: "question", attachments: [], compressOldContext: false };
 
-let historyStore: { close: () => Promise<void> };
+let historyStore: import("../src/background/history-store").HistoryStore;
 beforeAll(async () => { ({ historyStore } = await import("../src/background/index")); });
 afterAll(async () => { await historyStore.close(); });
 
@@ -93,6 +98,50 @@ describe("background listeners", () => {
     message.listener?.({ type: "history:clear", conversationId: "clear-me" }, {}, response);
     await vi.waitFor(() => expect(stream.mock.calls.at(-1)?.[0].signal.aborted).toBe(true));
     await vi.waitFor(() => expect(response).toHaveBeenCalledWith({ ok: true }));
+  });
+
+  it("keeps a conversation blocked until overlapping clears both settle", async () => {
+    const first = deferred();
+    const second = deferred();
+    const remove = vi.spyOn(historyStore, "delete").mockImplementationOnce(async () => first.promise).mockImplementationOnce(async () => second.promise);
+    const firstResponse = vi.fn();
+    const secondResponse = vi.fn();
+    message.listener?.({ type: "history:clear", conversationId: "overlap" }, {}, firstResponse);
+    message.listener?.({ type: "history:clear", conversationId: "overlap" }, {}, secondResponse);
+    await vi.waitFor(() => expect(remove).toHaveBeenCalledTimes(2));
+    const blocked = new FakePort("side-chat-stream");
+    connect.listener?.(blocked);
+    blocked.onMessage.listener?.({ type: "start", requestId: "blocked-one", payload: { ...payload, conversationId: "overlap" } });
+    expect(blocked.posted.at(-1)).toMatchObject({ type: "error", error: { code: "STORAGE_FAILED" } });
+    first.resolve();
+    await vi.waitFor(() => expect(firstResponse).toHaveBeenCalledWith({ ok: true }));
+    const stillBlocked = new FakePort("side-chat-stream");
+    connect.listener?.(stillBlocked);
+    stillBlocked.onMessage.listener?.({ type: "start", requestId: "blocked-two", payload: { ...payload, conversationId: "overlap" } });
+    expect(stillBlocked.posted.at(-1)).toMatchObject({ type: "error", error: { code: "STORAGE_FAILED" } });
+    second.resolve();
+    await vi.waitFor(() => expect(secondResponse).toHaveBeenCalledWith({ ok: true }));
+    remove.mockRestore();
+  });
+
+  it("keeps all conversations blocked until overlapping clear-all operations settle", async () => {
+    const first = deferred();
+    const second = deferred();
+    const clear = vi.spyOn(historyStore, "clear").mockImplementationOnce(async () => first.promise).mockImplementationOnce(async () => second.promise);
+    const firstResponse = vi.fn();
+    const secondResponse = vi.fn();
+    message.listener?.({ type: "history:clear-all" }, {}, firstResponse);
+    message.listener?.({ type: "history:clear-all" }, {}, secondResponse);
+    await vi.waitFor(() => expect(clear).toHaveBeenCalledTimes(2));
+    first.resolve();
+    await vi.waitFor(() => expect(firstResponse).toHaveBeenCalledWith({ ok: true }));
+    const blocked = new FakePort("side-chat-stream");
+    connect.listener?.(blocked);
+    blocked.onMessage.listener?.({ type: "start", requestId: "blocked-all", payload: { ...payload, conversationId: "any" } });
+    expect(blocked.posted.at(-1)).toMatchObject({ type: "error", error: { code: "STORAGE_FAILED" } });
+    second.resolve();
+    await vi.waitFor(() => expect(secondResponse).toHaveBeenCalledWith({ ok: true }));
+    clear.mockRestore();
   });
 
   it("normalizes unknown stream failures as retryable network failures", async () => {
