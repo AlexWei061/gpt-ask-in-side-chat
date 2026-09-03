@@ -21,6 +21,12 @@ function quotedPayload(content: string | ChatCompletionContentPart[]) {
 }
 
 describe("buildChatMessages", () => {
+  it("uses system, main context, one assistant history message, and the current question", () => {
+    const result = messages({ sideMessages: [sideMessages[0]!] });
+
+    expect(result.map((message) => message.role)).toEqual(["system", "user", "assistant", "user"]);
+  });
+
   it("builds uncompressed main context, ordered side history, and selected question", () => {
     const result = messages();
 
