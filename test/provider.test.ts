@@ -104,6 +104,22 @@ describe("streamChatCompletion", () => {
     await expect(streamChatCompletion(args({ fetcher: vi.fn(async () => sseResponse(body)) }))).resolves.toBe("AB");
   });
 
+  it("keeps a CRLF multi-data event intact when transport splits after its first line ending", async () => {
+    const firstChunk = 'data: {"choices":[{"delta":\r\n';
+    const secondChunk = 'data: {"content":"Hello"}}]}\r\n\r\ndata: [DONE]\r\n\r\n';
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(firstChunk));
+        controller.enqueue(new TextEncoder().encode(secondChunk));
+        controller.close();
+      },
+    });
+    const onDelta = vi.fn();
+    await expect(streamChatCompletion(args({ fetcher: vi.fn(async () => streamResponse(stream)), onDelta })))
+      .resolves.toBe("Hello");
+    expect(onDelta).toHaveBeenCalledWith("Hello");
+  });
+
   it("maps a reader failure to a retryable network error and releases the reader", async () => {
     const stream = new ReadableStream<Uint8Array>({ pull: () => Promise.reject(new Error("socket lost")) });
     const error = await streamChatCompletion(args({ fetcher: vi.fn(async () => streamResponse(stream)) }))

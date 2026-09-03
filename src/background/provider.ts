@@ -37,6 +37,28 @@ function protocolError(): ExtensionError {
   return new ExtensionError("PROTOCOL_FAILED", "The AI provider sent an invalid streaming response.", true);
 }
 
+function lineEndingLength(value: string, index: number, allowTrailingCr = false): number {
+  if (value[index] === "\n") return 1;
+  if (value[index] !== "\r") return 0;
+  if (value[index + 1] === "\n") return 2;
+  return index + 1 < value.length || allowTrailingCr ? 1 : 0;
+}
+
+function findEventBoundary(value: string): { index: number; length: number } | null {
+  for (let index = 0; index < value.length;) {
+    const firstLength = lineEndingLength(value, index);
+    if (!firstLength) {
+      index += 1;
+      continue;
+    }
+
+    const secondLength = lineEndingLength(value, index + firstLength, true);
+    if (secondLength) return { index, length: firstLength + secondLength };
+    index += firstLength;
+  }
+  return null;
+}
+
 function processFrame(frame: string, onDelta: (content: string) => void): { content: string; done: boolean } {
   const data = frame
     .split(/\r\n|\r|\n/)
@@ -130,11 +152,10 @@ export async function streamChatCompletion({
         buffer += decoder.decode();
       }
 
-      let boundary: RegExpMatchArray | null;
-      while ((boundary = /(?:\r\n|\r|\n){2}/.exec(buffer))) {
-        const boundaryIndex = boundary.index ?? 0;
-        const frame = buffer.slice(0, boundaryIndex);
-        buffer = buffer.slice(boundaryIndex + boundary[0].length);
+      let boundary: { index: number; length: number } | null;
+      while ((boundary = findEventBoundary(buffer))) {
+        const frame = buffer.slice(0, boundary.index);
+        buffer = buffer.slice(boundary.index + boundary.length);
         const event = processFrame(frame, onDelta);
         complete += event.content;
         if (event.done) return complete;
