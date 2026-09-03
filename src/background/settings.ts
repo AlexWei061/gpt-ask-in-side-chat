@@ -9,7 +9,7 @@ const MAX_CONTEXT_WINDOW_TOKENS = 10_000_000;
 
 type SessionKey = {
   apiKey: string;
-  providerOrigin: string;
+  providerBaseUrl: string;
 };
 
 export type InternalSettings = {
@@ -49,18 +49,14 @@ export function normalizeProviderConfig(value: unknown): ProviderConfig {
   };
 }
 
-function providerOrigin(config: ProviderConfig): string {
-  return new URL(config.baseUrl).origin;
-}
-
 function readSessionKey(value: unknown, config: ProviderConfig | null): string | null {
   if (!value || typeof value !== "object" || !config) return null;
   const sessionKey = value as Partial<SessionKey>;
   if (
     typeof sessionKey.apiKey !== "string"
-    || !sessionKey.apiKey
-    || typeof sessionKey.providerOrigin !== "string"
-    || sessionKey.providerOrigin !== providerOrigin(config)
+    || !sessionKey.apiKey.trim()
+    || typeof sessionKey.providerBaseUrl !== "string"
+    || sessionKey.providerBaseUrl !== config.baseUrl
   ) {
     return null;
   }
@@ -121,7 +117,7 @@ export async function setSessionKey(apiKey: string): Promise<void> {
   const local = await chrome.storage.local.get(CONFIG_KEY);
   const config = normalizeProviderConfig(local[CONFIG_KEY]);
   await chrome.storage.session.set({
-    [API_KEY]: { apiKey: trimmedKey, providerOrigin: providerOrigin(config) },
+    [API_KEY]: { apiKey, providerBaseUrl: config.baseUrl },
   });
 }
 

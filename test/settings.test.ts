@@ -130,7 +130,37 @@ describe("provider settings", () => {
     await expect(loadInternalSettings()).resolves.toMatchObject({ config: providerB, apiKey: null });
     await setSessionKey("key-b");
     await expect(loadInternalSettings()).resolves.toMatchObject({ apiKey: "key-b" });
-    expect(session.data["provider-api-key"]).toEqual({ apiKey: "key-b", providerOrigin: "https://b.example.com" });
+    expect(session.data["provider-api-key"]).toEqual({ apiKey: "key-b", providerBaseUrl: "https://b.example.com/v1" });
+  });
+
+  it("binds keys to the complete provider endpoint but not the selected model", async () => {
+    const providerA = {
+      baseUrl: "https://gateway.example.com/provider-a/v1",
+      model: "model-a",
+      contextWindowTokens: 128000,
+      supportsImages: false,
+    };
+    const providerB = { ...providerA, baseUrl: "https://gateway.example.com/provider-b/v1" };
+
+    await saveProviderConfig(providerA, true);
+    await setSessionKey(" key-a ");
+    await saveProviderConfig(providerB, true);
+    await expect(loadInternalSettings()).resolves.toMatchObject({ apiKey: null });
+    await saveProviderConfig({ ...providerA, model: "model-a-revised" }, true);
+    await expect(loadInternalSettings()).resolves.toMatchObject({ apiKey: " key-a " });
+  });
+
+  it("rejects blank keys and preserves nonblank opaque key input", async () => {
+    await saveProviderConfig({
+      baseUrl: "https://api.example.com/v1",
+      model: "model-a",
+      contextWindowTokens: 128000,
+      supportsImages: false,
+    }, true);
+
+    await expect(setSessionKey(" \t ")).rejects.toThrow(/required/i);
+    await setSessionKey(" secret ");
+    await expect(loadInternalSettings()).resolves.toMatchObject({ apiKey: " secret " });
   });
 
   it("restricts storage and manages only the expected local and session keys", async () => {
@@ -150,7 +180,7 @@ describe("provider settings", () => {
     expect(session.setAccessLevel).toHaveBeenCalledWith({ accessLevel: "TRUSTED_CONTEXTS" });
     expect(local.set).toHaveBeenCalledWith({ "provider-config": config, "privacy-accepted": true });
     expect(session.set).toHaveBeenCalledWith({
-      "provider-api-key": { apiKey: "secret", providerOrigin: "https://api.example.com" },
+      "provider-api-key": { apiKey: "secret", providerBaseUrl: "https://api.example.com/v1" },
     });
     expect(session.remove).toHaveBeenCalledWith("provider-api-key");
   });
