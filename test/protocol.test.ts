@@ -61,6 +61,9 @@ describe("send payload guard", () => {
     expect(isSendPayload({ ...validPayload(), quote: { ...validPayload().quote, sourceRole: "assistant" } })).toBe(false);
     expect(isSendPayload({ ...validPayload(), attachments: [{ ...validPayload().attachments[0], sourceMessageIndex: 2 }] })).toBe(false);
     expect(isSendPayload({ ...validPayload(), attachments: [{ kind: "image", name: "x", sourceMessageIndex: 0, dataUrl: "https://example.com/x.png" }] })).toBe(false);
+    expect(isSendPayload({ ...validPayload(), mainMessages: [{ ...validPayload().mainMessages[0], content: "  " }] })).toBe(false);
+    expect(isSendPayload({ ...validPayload(), quote: { ...validPayload().quote, text: " " } })).toBe(false);
+    expect(isSendPayload({ ...validPayload(), attachments: [{ kind: "image", name: "x", sourceMessageIndex: 0, dataUrl: "data:image/png;base64," }] })).toBe(false);
   });
 });
 

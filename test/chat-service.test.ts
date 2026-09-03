@@ -152,6 +152,13 @@ describe("ChatService", () => {
     expect(history.record?.messages).toHaveLength(1);
   });
 
+  it("does not persist a whitespace-only streamed assistant response", async () => {
+    const { service, history } = createService({ stream: async ({ onDelta }) => { onDelta(" \n "); return ""; } });
+    const error = await service.send(payload, new AbortController().signal, () => {}).catch((reason: unknown) => reason);
+    expect(errorCode(error)).toBe("PROTOCOL_FAILED");
+    expect(history.record?.messages).toHaveLength(1);
+  });
+
   it("serializes concurrent sends for one conversation and preserves both exchanges", async () => {
     let releaseFirst: ((value: string) => void) | undefined;
     const stream = vi.fn()

@@ -23,8 +23,8 @@ const chatService = new ChatService({
 });
 type ActiveRequest = { controller: AbortController; promise: Promise<unknown> };
 const activeRequests = new Map<string, Set<ActiveRequest>>();
-const clearingConversations = new Set<string>();
-let clearingAll = false;
+const clearingConversations = new Map<string, number>();
+let clearingAll = 0;
 
 void restrictStorageAccess();
 
@@ -53,7 +53,7 @@ chrome.runtime.onConnect.addListener((port) => {
       return;
     }
     if (controllers.has(message.requestId)) return;
-    if (clearingAll || clearingConversations.has(message.payload.conversationId)) {
+    if (clearingAll > 0 || (clearingConversations.get(message.payload.conversationId) ?? 0) > 0) {
       post(port, { type: "error", requestId: message.requestId, error: { code: "STORAGE_FAILED", message: "Side-chat history is being cleared.", retryable: true } });
       return;
     }
@@ -121,26 +121,28 @@ function removeActive(conversationId: string, active: ActiveRequest): void {
 }
 
 async function clearConversation(conversationId: string): Promise<void> {
-  clearingConversations.add(conversationId);
+  clearingConversations.set(conversationId, (clearingConversations.get(conversationId) ?? 0) + 1);
   try {
     const active = [...(activeRequests.get(conversationId) ?? [])];
     active.forEach(({ controller }) => controller.abort());
     await Promise.allSettled(active.map(({ promise }) => promise));
     await historyStore.delete(conversationId);
   } finally {
-    clearingConversations.delete(conversationId);
+    const remaining = (clearingConversations.get(conversationId) ?? 1) - 1;
+    if (remaining > 0) clearingConversations.set(conversationId, remaining);
+    else clearingConversations.delete(conversationId);
   }
 }
 
 async function clearAllConversations(): Promise<void> {
-  clearingAll = true;
+  clearingAll += 1;
   try {
     const active = [...activeRequests.values()].flatMap((requests) => [...requests]);
     active.forEach(({ controller }) => controller.abort());
     await Promise.allSettled(active.map(({ promise }) => promise));
     await historyStore.clear();
   } finally {
-    clearingAll = false;
+    clearingAll -= 1;
   }
 }
 

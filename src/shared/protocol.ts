@@ -63,10 +63,11 @@ export function isSendPayload(value: unknown): value is SendPayload {
   const quote = value.quote as QuoteReference;
   const attachments = value.attachments as PreparedAttachment[];
   const quotedMessage = mainMessages[quote.sourceMessageIndex];
-  return mainMessages.every((message, index) => message.index === index)
+  return mainMessages.every((message, index) => message.index === index && message.content.trim().length > 0)
     && quotedMessage?.role === quote.sourceRole
+    && quote.text.trim().length > 0
     && attachments.every((attachment) => attachment.sourceMessageIndex < mainMessages.length)
-    && true;
+    ;
 }
 
 function hasOnlyKeys(value: Record<string, unknown>, keys: string[]): boolean {
@@ -94,7 +95,7 @@ function isQuoteReference(value: unknown): value is QuoteReference {
 function isPreparedAttachment(value: unknown): value is PreparedAttachment {
   if (!isObject(value) || typeof value.name !== "string" || typeof value.sourceMessageIndex !== "number" || !Number.isInteger(value.sourceMessageIndex) || value.sourceMessageIndex < 0) return false;
   if (value.kind === "text") return hasOnlyKeys(value, ["kind", "name", "sourceMessageIndex", "text"]) && typeof value.text === "string";
-  return value.kind === "image" && hasOnlyKeys(value, ["kind", "name", "sourceMessageIndex", "dataUrl"]) && typeof value.dataUrl === "string" && /^data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/]*={0,2}$/i.test(value.dataUrl);
+  return value.kind === "image" && hasOnlyKeys(value, ["kind", "name", "sourceMessageIndex", "dataUrl"]) && typeof value.dataUrl === "string" && /^data:image\/[a-z0-9.+-]+;base64,(?=.+)(?:[a-z0-9+/]{4})*(?:[a-z0-9+/]{2}==|[a-z0-9+/]{3}=)?$/i.test(value.dataUrl);
 }
 
 function isProviderConfig(value: unknown): value is ProviderConfig {

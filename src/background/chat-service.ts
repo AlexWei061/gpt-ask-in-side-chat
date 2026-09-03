@@ -23,20 +23,19 @@ export class ChatService {
 
   async send(payload: SendPayload, signal: AbortSignal, onEvent: (event: ChatServiceEvent) => void): Promise<SideChatRecord> {
     const previous = this.tails.get(payload.conversationId) ?? Promise.resolve();
-    let release: (() => void) | undefined;
-    const current = previous.catch(() => {}).then(() => new Promise<void>((resolve) => { release = resolve; }));
-    this.tails.set(payload.conversationId, current);
-    try {
-      await waitForTurn(previous, signal);
-      return await this.sendOnce(payload, signal, onEvent);
-    } finally {
-      release?.();
-      if (this.tails.get(payload.conversationId) === current) this.tails.delete(payload.conversationId);
-    }
+    const run = previous.catch(() => {}).then(() => {
+      signal.throwIfAborted();
+      return this.sendOnce(payload, signal, onEvent);
+    });
+    const tail = run.then(() => undefined, () => undefined);
+    this.tails.set(payload.conversationId, tail);
+    void tail.then(() => { if (this.tails.get(payload.conversationId) === tail) this.tails.delete(payload.conversationId); });
+    return run;
   }
 
   private async sendOnce(payload: SendPayload, signal: AbortSignal, onEvent: (event: ChatServiceEvent) => void): Promise<SideChatRecord> {
-    const settings = await this.dependencies.loadSettings();
+    let settings: InternalSettings;
+    try { settings = await this.dependencies.loadSettings(); } catch { throw new ExtensionError("STORAGE_FAILED", "The extension could not load its settings."); }
     if (!settings.privacyAccepted || !settings.config) {
       throw new ExtensionError("PERMISSION_REQUIRED", "Accept the privacy notice and configure a provider before sending a question.");
     }
@@ -53,7 +52,6 @@ export class ChatService {
       throw new ExtensionError("STORAGE_FAILED", "The extension could not read side-chat history.");
     }
     const retry = findRetry(existing, payload);
-    if (retry?.assistantIndex !== undefined) existing.messages.splice(retry.assistantIndex, 1);
     const priorMessages = retry ? existing.messages.slice(0, retry.userIndex) : existing.messages;
     let messages = this.buildRequest(payload, priorMessages, null);
     let approximateTokens = estimateTokens(JSON.stringify(messages));
@@ -92,7 +90,10 @@ export class ChatService {
       completed = true;
     } finally {
       if (!retry) existing.messages.push(user);
-      if (assistant.content) existing.messages.push(assistant);
+      if (assistant.content.trim()) {
+        if (retry?.assistantIndex !== undefined) existing.messages.splice(retry.assistantIndex, 1);
+        existing.messages.push(assistant);
+      }
       existing.updatedAt = new Date().toISOString();
       try {
         await this.dependencies.history.put(existing);
@@ -139,23 +140,17 @@ export class ChatService {
 
 }
 
-function waitForTurn(previous: Promise<void>, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) return Promise.reject(new DOMException("The request was aborted.", "AbortError"));
-  return new Promise((resolve, reject) => {
-    const abort = () => { cleanup(); reject(new DOMException("The request was aborted.", "AbortError")); };
-    const cleanup = () => signal.removeEventListener("abort", abort);
-    signal.addEventListener("abort", abort, { once: true });
-    void previous.then(() => { cleanup(); resolve(); }, () => { cleanup(); resolve(); });
-  });
-}
-
 function findRetry(record: SideChatRecord, payload: SendPayload): { user: SideMessage; userIndex: number; assistantIndex?: number } | null {
   const last = record.messages.at(-1);
   const assistant = last?.role === "assistant" && last.status === "incomplete" ? last : undefined;
   const userIndex = assistant ? record.messages.length - 2 : record.messages.length - 1;
   const user = record.messages[userIndex];
-  if (!user || user.role !== "user" || user.content !== payload.question || JSON.stringify(user.quote) !== JSON.stringify(payload.quote)) return null;
+  if (!user || user.role !== "user" || user.content !== payload.question || !sameQuote(user.quote, payload.quote)) return null;
   return assistant ? { user, userIndex, assistantIndex: record.messages.length - 1 } : { user, userIndex };
+}
+
+function sameQuote(left: SideMessage["quote"], right: SendPayload["quote"]): boolean {
+  return left?.text === right.text && left.sourceRole === right.sourceRole && left.sourceMessageIndex === right.sourceMessageIndex;
 }
 
 function splitForCompression(value: string, tokenBudget: number): string[] {
@@ -184,20 +179,34 @@ function compressionMessages(content: string): ChatCompletionMessage[] {
 function splitForProviderCompression(value: string, tokenBudget: number): string[] {
   const segments: string[] = [];
   let segment = "";
+  const limit = tokenBudget * 4;
+  const fixed = quarterUnits(JSON.stringify(compressionMessages("")));
+  let used = fixed;
   for (const character of value) {
-    const candidate = segment + character;
-    if (estimateTokens(JSON.stringify(compressionMessages(candidate))) > tokenBudget) {
+    const characterUnits = quarterUnits(JSON.stringify(character)) - 2;
+    if (used + characterUnits > limit) {
       if (!segment) {
         throw new ExtensionError("PROTOCOL_FAILED", "The provider context window cannot support context compression.");
       }
       segments.push(segment);
       segment = character;
+      used = fixed + characterUnits;
     } else {
-      segment = candidate;
+      segment += character;
+      used += characterUnits;
     }
   }
   if (segment) segments.push(segment);
+  if (segments.some((part) => estimateTokens(JSON.stringify(compressionMessages(part))) > tokenBudget)) {
+    throw new ExtensionError("PROTOCOL_FAILED", "The provider context window cannot support context compression.");
+  }
   return segments;
+}
+
+function quarterUnits(value: string): number {
+  let units = 0;
+  for (const character of value) units += character.codePointAt(0)! > 0x7f ? 4 : 1;
+  return units;
 }
 
 function emptyRecord(conversationId: string): SideChatRecord {
