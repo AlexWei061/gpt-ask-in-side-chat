@@ -26,6 +26,7 @@ export function quoteFromRange(range: Range, adapter: ChatGptPageAdapter): Quote
 export class SelectionController {
   private readonly adapter: ChatGptPageAdapter;
   private readonly button: HTMLButtonElement;
+  private frameId: number | null = null;
 
   constructor(private readonly document: Document, private readonly onAsk: (quote: QuoteReference) => void) {
     this.adapter = new ChatGptPageAdapter(document);
@@ -42,6 +43,8 @@ export class SelectionController {
       border: "0",
       borderRadius: "999px",
       padding: "8px 12px",
+      maxWidth: "calc(100vw - 16px)",
+      boxSizing: "border-box",
       font: "inherit",
       cursor: "pointer",
     });
@@ -50,6 +53,9 @@ export class SelectionController {
     document.addEventListener("selectionchange", this.handleSelectionChange);
     document.addEventListener("scroll", this.hide, true);
     document.addEventListener("keydown", this.handleKeydown);
+    document.addEventListener("mousedown", this.handleDocumentMouseDown);
+    document.defaultView?.addEventListener("resize", this.hide);
+    document.defaultView?.visualViewport?.addEventListener("resize", this.hide);
     this.button.addEventListener("mousedown", this.handleMouseDown);
     this.button.addEventListener("click", this.handleClick);
   }
@@ -58,12 +64,32 @@ export class SelectionController {
     this.document.removeEventListener("selectionchange", this.handleSelectionChange);
     this.document.removeEventListener("scroll", this.hide, true);
     this.document.removeEventListener("keydown", this.handleKeydown);
+    this.document.removeEventListener("mousedown", this.handleDocumentMouseDown);
+    this.document.defaultView?.removeEventListener("resize", this.hide);
+    this.document.defaultView?.visualViewport?.removeEventListener("resize", this.hide);
     this.button.removeEventListener("mousedown", this.handleMouseDown);
     this.button.removeEventListener("click", this.handleClick);
+    if (this.frameId !== null) this.document.defaultView?.cancelAnimationFrame(this.frameId);
     this.button.remove();
   }
 
   private readonly handleSelectionChange = (): void => {
+    if (this.frameId !== null) return;
+    const view = this.document.defaultView;
+    if (!view) {
+      this.refreshSelection();
+      return;
+    }
+    let refreshed = false;
+    const frameId = view.requestAnimationFrame(() => {
+      refreshed = true;
+      this.frameId = null;
+      this.refreshSelection();
+    });
+    this.frameId = refreshed ? null : frameId;
+  };
+
+  private refreshSelection(): void {
     const range = this.currentRange();
     if (!range || !quoteFromRange(range, this.adapter)) {
       this.hide();
@@ -84,7 +110,7 @@ export class SelectionController {
     this.button.style.left = `${left}px`;
     this.button.style.top = `${top}px`;
     this.button.style.visibility = previousVisibility;
-  };
+  }
 
   private readonly handleKeydown = (event: KeyboardEvent): void => {
     if (event.key === "Escape") this.hide();
@@ -92,6 +118,10 @@ export class SelectionController {
 
   private readonly handleMouseDown = (event: MouseEvent): void => {
     event.preventDefault();
+  };
+
+  private readonly handleDocumentMouseDown = (event: MouseEvent): void => {
+    if (!event.composedPath().includes(this.button)) this.hide();
   };
 
   private readonly handleClick = (): void => {

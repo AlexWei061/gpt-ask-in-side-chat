@@ -1,8 +1,20 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SelectionController, quoteFromRange } from "../src/content/selection";
 import { ChatGptPageAdapter } from "../src/content/page-adapter";
 
 describe("selection", () => {
+  const originalViewport = { width: window.innerWidth, height: window.innerHeight };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    Object.defineProperties(window, {
+      innerWidth: { configurable: true, value: originalViewport.width },
+      innerHeight: { configurable: true, value: originalViewport.height },
+    });
+    document.getSelection()?.removeAllRanges();
+    document.body.innerHTML = "";
+  });
+
   it("creates a quote only inside one message", () => {
     document.body.innerHTML = `<main><article data-message-author-role="assistant"><p id="a">alpha beta</p></article><article data-message-author-role="user"><p id="b">gamma</p></article></main>`;
     const range = document.createRange();
@@ -28,11 +40,27 @@ describe("selection", () => {
     expect(quoteFromRange(range, new ChatGptPageAdapter(document))).toBeNull();
   });
 
-  it("opens only after the explicit action is clicked", () => {
+  it("preserves a valid selection until the explicit action sends its quote", () => {
+    document.body.innerHTML = `<main><article data-message-author-role="assistant"><p id="a">alpha beta</p></article></main>`;
     const onAsk = vi.fn();
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(0);
+      return 1;
+    });
+    const range = document.createRange();
+    range.selectNodeContents(document.querySelector("#a")!);
+    document.getSelection()?.addRange(range);
     const controller = new SelectionController(document, onAsk);
+    const button = document.querySelector<HTMLButtonElement>("[data-side-chat-selection-action]")!;
+    document.dispatchEvent(new Event("selectionchange"));
+    button.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+    expect(document.getSelection()?.rangeCount).toBe(1);
+    button.click();
+
+    expect(onAsk).toHaveBeenCalledWith({ text: "alpha beta", sourceRole: "assistant", sourceMessageIndex: 0 });
+    expect(document.getSelection()?.rangeCount).toBe(0);
+    expect(button.style.display).toBe("none");
     controller.destroy();
-    expect(onAsk).not.toHaveBeenCalled();
   });
 
   it("positions the action inside the viewport and hides it for invalid selections", () => {
@@ -44,6 +72,10 @@ describe("selection", () => {
     const range = document.createRange();
     range.selectNodeContents(document.querySelector("#a")!);
     vi.spyOn(range, "getBoundingClientRect").mockReturnValue(new DOMRect(95, 75, 0, 20));
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(0);
+      return 1;
+    });
     document.getSelection()?.removeAllRanges();
     document.getSelection()?.addRange(range);
     const controller = new SelectionController(document, vi.fn());
@@ -58,5 +90,79 @@ describe("selection", () => {
     document.dispatchEvent(new Event("selectionchange"));
     expect(button.style.display).toBe("none");
     controller.destroy();
+  });
+
+  it("hides a visible action after an outside press without sending", () => {
+    document.body.innerHTML = `<main><article data-message-author-role="assistant"><p id="a">alpha beta</p></article></main>`;
+    const onAsk = vi.fn();
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(0);
+      return 1;
+    });
+    const range = document.createRange();
+    range.selectNodeContents(document.querySelector("#a")!);
+    document.getSelection()?.addRange(range);
+    const controller = new SelectionController(document, onAsk);
+    const button = document.querySelector<HTMLButtonElement>("[data-side-chat-selection-action]")!;
+    document.dispatchEvent(new Event("selectionchange"));
+    expect(button.style.display).toBe("block");
+
+    document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    expect(button.style.display).toBe("none");
+    expect(onAsk).not.toHaveBeenCalled();
+    controller.destroy();
+  });
+
+  it("hides a visible action when the window resizes", () => {
+    document.body.innerHTML = `<main><article data-message-author-role="assistant"><p id="a">alpha beta</p></article></main>`;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(0);
+      return 1;
+    });
+    const range = document.createRange();
+    range.selectNodeContents(document.querySelector("#a")!);
+    document.getSelection()?.addRange(range);
+    const controller = new SelectionController(document, vi.fn());
+    const button = document.querySelector<HTMLButtonElement>("[data-side-chat-selection-action]")!;
+    document.dispatchEvent(new Event("selectionchange"));
+
+    window.dispatchEvent(new Event("resize"));
+    expect(button.style.display).toBe("none");
+    controller.destroy();
+  });
+
+  it("limits the action width to the viewport", () => {
+    const controller = new SelectionController(document, vi.fn());
+    const button = document.querySelector<HTMLButtonElement>("[data-side-chat-selection-action]")!;
+
+    expect(button.style.maxWidth).toBe("calc(100vw - 16px)");
+    expect(button.style.boxSizing).toBe("border-box");
+    controller.destroy();
+  });
+
+  it("coalesces immediate selection changes and cancels pending work on destroy", () => {
+    document.body.innerHTML = `<main><article data-message-author-role="assistant"><p id="a">alpha beta</p></article></main>`;
+    const range = document.createRange();
+    range.selectNodeContents(document.querySelector("#a")!);
+    document.getSelection()?.addRange(range);
+    let refresh: FrameRequestCallback | undefined;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      refresh = callback;
+      return 42;
+    });
+    const cancel = vi.spyOn(window, "cancelAnimationFrame");
+    const extract = vi.spyOn(ChatGptPageAdapter.prototype, "extractConversation");
+    const controller = new SelectionController(document, vi.fn());
+
+    document.dispatchEvent(new Event("selectionchange"));
+    document.dispatchEvent(new Event("selectionchange"));
+    expect(window.requestAnimationFrame).toHaveBeenCalledTimes(1);
+    expect(extract).not.toHaveBeenCalled();
+    refresh?.(0);
+    expect(extract).toHaveBeenCalledTimes(1);
+
+    document.dispatchEvent(new Event("selectionchange"));
+    controller.destroy();
+    expect(cancel).toHaveBeenCalledWith(42);
   });
 });
