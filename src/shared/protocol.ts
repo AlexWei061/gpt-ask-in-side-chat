@@ -53,12 +53,20 @@ export function isStreamClientMessage(value: unknown): value is StreamClientMess
 
 export function isSendPayload(value: unknown): value is SendPayload {
   if (!isObject(value) || !hasOnlyKeys(value, ["conversationId", "mainMessages", "quote", "question", "attachments", "compressOldContext"])) return false;
-  return isNonEmptyString(value.conversationId)
-    && Array.isArray(value.mainMessages) && value.mainMessages.every(isMainMessage)
-    && isQuoteReference(value.quote)
-    && typeof value.question === "string" && value.question.trim().length > 0
-    && Array.isArray(value.attachments) && value.attachments.every(isPreparedAttachment)
-    && typeof value.compressOldContext === "boolean";
+  if (!isNonEmptyString(value.conversationId)
+    || !Array.isArray(value.mainMessages) || value.mainMessages.length === 0 || !value.mainMessages.every(isMainMessage)
+    || !isQuoteReference(value.quote)
+    || typeof value.question !== "string" || value.question.trim().length === 0
+    || !Array.isArray(value.attachments) || !value.attachments.every(isPreparedAttachment)
+    || typeof value.compressOldContext !== "boolean") return false;
+  const mainMessages = value.mainMessages as MainMessage[];
+  const quote = value.quote as QuoteReference;
+  const attachments = value.attachments as PreparedAttachment[];
+  const quotedMessage = mainMessages[quote.sourceMessageIndex];
+  return mainMessages.every((message, index) => message.index === index)
+    && quotedMessage?.role === quote.sourceRole
+    && attachments.every((attachment) => attachment.sourceMessageIndex < mainMessages.length)
+    && true;
 }
 
 function hasOnlyKeys(value: Record<string, unknown>, keys: string[]): boolean {
@@ -86,7 +94,7 @@ function isQuoteReference(value: unknown): value is QuoteReference {
 function isPreparedAttachment(value: unknown): value is PreparedAttachment {
   if (!isObject(value) || typeof value.name !== "string" || typeof value.sourceMessageIndex !== "number" || !Number.isInteger(value.sourceMessageIndex) || value.sourceMessageIndex < 0) return false;
   if (value.kind === "text") return hasOnlyKeys(value, ["kind", "name", "sourceMessageIndex", "text"]) && typeof value.text === "string";
-  return value.kind === "image" && hasOnlyKeys(value, ["kind", "name", "sourceMessageIndex", "dataUrl"]) && typeof value.dataUrl === "string";
+  return value.kind === "image" && hasOnlyKeys(value, ["kind", "name", "sourceMessageIndex", "dataUrl"]) && typeof value.dataUrl === "string" && /^data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/]*={0,2}$/i.test(value.dataUrl);
 }
 
 function isProviderConfig(value: unknown): value is ProviderConfig {

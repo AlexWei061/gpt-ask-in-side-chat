@@ -21,6 +21,10 @@ const chatService = new ChatService({
   loadSettings: loadInternalSettings,
   stream: (args) => streamChatCompletion({ ...args, fetcher: fetch }),
 });
+type ActiveRequest = { controller: AbortController; promise: Promise<unknown> };
+const activeRequests = new Map<string, Set<ActiveRequest>>();
+const clearingConversations = new Set<string>();
+let clearingAll = false;
 
 void restrictStorageAccess();
 
@@ -49,17 +53,25 @@ chrome.runtime.onConnect.addListener((port) => {
       return;
     }
     if (controllers.has(message.requestId)) return;
+    if (clearingAll || clearingConversations.has(message.payload.conversationId)) {
+      post(port, { type: "error", requestId: message.requestId, error: { code: "STORAGE_FAILED", message: "Side-chat history is being cleared.", retryable: true } });
+      return;
+    }
 
     const controller = new AbortController();
     controllers.set(message.requestId, controller);
-    void chatService.send(message.payload, controller.signal, (event) => {
+    const request = chatService.send(message.payload, controller.signal, (event) => {
       if (event.type === "accepted") post(port, { type: "accepted", requestId: message.requestId, approximateTokens: event.approximateTokens });
       else post(port, { type: "delta", requestId: message.requestId, text: event.text });
-    }).then(
+    });
+    const active = { controller, promise: request };
+    addActive(message.payload.conversationId, active);
+    void request.then(
       (record) => post(port, { type: "done", requestId: message.requestId, record }),
-      (error: unknown) => post(port, { type: "error", requestId: message.requestId, error: normalizeStreamError(error) }),
+      (error: unknown) => { if (!controller.signal.aborted) post(port, { type: "error", requestId: message.requestId, error: normalizeStreamError(error) }); },
     ).finally(() => {
       controllers.delete(message.requestId);
+      removeActive(message.payload.conversationId, active);
     });
   });
 
@@ -86,12 +98,49 @@ async function handleRuntimeRequest(request: RuntimeRequest): Promise<RuntimeRes
         return { ok: true, value: { panelWidth: width } };
       }
       case "history:load": return { ok: true, value: await historyStore.get(request.conversationId) };
-      case "history:clear": await historyStore.delete(request.conversationId); return { ok: true };
-      case "history:clear-all": await historyStore.clear(); return { ok: true };
+      case "history:clear": await clearConversation(request.conversationId); return { ok: true };
+      case "history:clear-all": await clearAllConversations(); return { ok: true };
       default: return { ok: false, error: { code: "STORAGE_FAILED", message: "Unsupported runtime request." } };
     }
   } catch (error) {
     return { ok: false, error: normalizeError(error) };
+  }
+}
+
+function addActive(conversationId: string, active: ActiveRequest): void {
+  const activeForConversation = activeRequests.get(conversationId) ?? new Set<ActiveRequest>();
+  activeForConversation.add(active);
+  activeRequests.set(conversationId, activeForConversation);
+}
+
+function removeActive(conversationId: string, active: ActiveRequest): void {
+  const activeForConversation = activeRequests.get(conversationId);
+  if (!activeForConversation) return;
+  activeForConversation.delete(active);
+  if (activeForConversation.size === 0) activeRequests.delete(conversationId);
+}
+
+async function clearConversation(conversationId: string): Promise<void> {
+  clearingConversations.add(conversationId);
+  try {
+    const active = [...(activeRequests.get(conversationId) ?? [])];
+    active.forEach(({ controller }) => controller.abort());
+    await Promise.allSettled(active.map(({ promise }) => promise));
+    await historyStore.delete(conversationId);
+  } finally {
+    clearingConversations.delete(conversationId);
+  }
+}
+
+async function clearAllConversations(): Promise<void> {
+  clearingAll = true;
+  try {
+    const active = [...activeRequests.values()].flatMap((requests) => [...requests]);
+    active.forEach(({ controller }) => controller.abort());
+    await Promise.allSettled(active.map(({ promise }) => promise));
+    await historyStore.clear();
+  } finally {
+    clearingAll = false;
   }
 }
 

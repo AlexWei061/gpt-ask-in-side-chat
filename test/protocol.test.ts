@@ -55,6 +55,12 @@ describe("send payload guard", () => {
     expect(isSendPayload({ ...validPayload(), question: " \n " })).toBe(false);
     expect(isSendPayload({ ...validPayload(), attachments: [{ kind: "text", name: "x", sourceMessageIndex: 0 }] })).toBe(false);
     expect(isSendPayload({ ...validPayload(), sideMessages: [] })).toBe(false);
+    expect(isSendPayload({ ...validPayload(), mainMessages: [] })).toBe(false);
+    expect(isSendPayload({ ...validPayload(), mainMessages: [{ ...validPayload().mainMessages[0], index: 2 }] })).toBe(false);
+    expect(isSendPayload({ ...validPayload(), quote: { ...validPayload().quote, sourceMessageIndex: 1 } })).toBe(false);
+    expect(isSendPayload({ ...validPayload(), quote: { ...validPayload().quote, sourceRole: "assistant" } })).toBe(false);
+    expect(isSendPayload({ ...validPayload(), attachments: [{ ...validPayload().attachments[0], sourceMessageIndex: 2 }] })).toBe(false);
+    expect(isSendPayload({ ...validPayload(), attachments: [{ kind: "image", name: "x", sourceMessageIndex: 0, dataUrl: "https://example.com/x.png" }] })).toBe(false);
   });
 });
 

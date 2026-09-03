@@ -21,7 +21,7 @@ class MemoryHistory {
 }
 
 function createService(overrides: Partial<ChatServiceDependencies> = {}) {
-  const history = new MemoryHistory();
+  const history = overrides.history as MemoryHistory | undefined ?? new MemoryHistory();
   const stream = vi.fn(async ({ onDelta }: Parameters<ChatServiceDependencies["stream"]>[0]) => {
     onDelta("Hello");
     return "Hello";
@@ -143,5 +143,69 @@ describe("ChatService", () => {
     await expect(service.send(payload, controller.signal, () => {})).rejects.toBe(abort);
     expect(abortedStream).toHaveBeenCalledOnce();
     expect(history.record?.messages).toHaveLength(1);
+  });
+
+  it("rejects a whitespace-only zero-delta completion and persists only the user", async () => {
+    const { service, history } = createService({ stream: async () => " \n " });
+    const error = await service.send(payload, new AbortController().signal, () => {}).catch((reason: unknown) => reason);
+    expect(errorCode(error)).toBe("PROTOCOL_FAILED");
+    expect(history.record?.messages).toHaveLength(1);
+  });
+
+  it("serializes concurrent sends for one conversation and preserves both exchanges", async () => {
+    let releaseFirst: ((value: string) => void) | undefined;
+    const stream = vi.fn()
+      .mockImplementationOnce(() => new Promise<string>((resolve) => { releaseFirst = resolve; }))
+      .mockResolvedValueOnce("second");
+    const { service, history } = createService({ stream });
+    const first = service.send(payload, new AbortController().signal, () => {});
+    const second = service.send({ ...payload, question: "second" }, new AbortController().signal, () => {});
+    await vi.waitFor(() => expect(stream).toHaveBeenCalledOnce());
+    releaseFirst?.("first");
+    await first;
+    await vi.waitFor(() => expect(stream).toHaveBeenCalledTimes(2));
+    await second;
+    expect(history.record?.messages.map((message) => message.content)).toEqual([payload.question, "first", "second", "second"]);
+  });
+
+  it("does not run a queued request already aborted before its turn", async () => {
+    let releaseFirst: ((value: string) => void) | undefined;
+    const stream = vi.fn(() => new Promise<string>((resolve) => { releaseFirst = resolve; }));
+    const { service, history } = createService({ stream });
+    const first = service.send(payload, new AbortController().signal, () => {});
+    const controller = new AbortController();
+    const second = service.send({ ...payload, question: "second" }, controller.signal, () => {});
+    await vi.waitFor(() => expect(stream).toHaveBeenCalledOnce());
+    controller.abort();
+    releaseFirst?.("first");
+    await first;
+    await expect(second).rejects.toBeDefined();
+    expect(stream).toHaveBeenCalledOnce();
+    expect(history.record?.messages.map((message) => message.content)).toEqual([payload.question, "first"]);
+  });
+
+  it("reuses a failed user turn when retrying partial or zero-output failures", async () => {
+    const previous: SideChatRecord = { schemaVersion: 1, conversationId: payload.conversationId, messages: [
+      { id: "u", role: "user", content: payload.question, quote: payload.quote, status: "complete", createdAt: new Date(0).toISOString() },
+      { id: "a", role: "assistant", content: "partial", status: "incomplete", createdAt: new Date(1).toISOString() },
+    ], updatedAt: new Date(1).toISOString() };
+    const history = new MemoryHistory();
+    history.record = previous;
+    const retryStream = vi.fn(async (_args: Parameters<ChatServiceDependencies["stream"]>[0]) => "replacement");
+    const { service } = createService({ history, stream: retryStream });
+    await service.send(payload, new AbortController().signal, () => {});
+    expect(JSON.stringify(retryStream.mock.calls[0]?.[0].messages)).not.toContain("partial");
+    expect(history.record?.messages.map((message) => message.content)).toEqual([payload.question, "replacement"]);
+  });
+
+  it("maps history read and write failures to storage errors", async () => {
+    const brokenRead = { get: async () => { throw new Error("read"); }, put: async () => {} };
+    const { service: readService } = createService({ history: brokenRead });
+    const readError = await readService.send(payload, new AbortController().signal, () => {}).catch((reason: unknown) => reason);
+    expect(errorCode(readError)).toBe("STORAGE_FAILED");
+    const brokenWrite = { get: async () => null, put: async () => { throw new Error("write"); } };
+    const { service: writeService } = createService({ history: brokenWrite, stream: async () => "answer" });
+    const writeError = await writeService.send(payload, new AbortController().signal, () => {}).catch((reason: unknown) => reason);
+    expect(errorCode(writeError)).toBe("STORAGE_FAILED");
   });
 });

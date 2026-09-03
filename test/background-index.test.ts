@@ -31,8 +31,7 @@ Object.assign(globalThis, {
   },
 });
 
-const payload = { conversationId: "c1", mainMessages: [], quote: { text: "q", sourceRole: "user", sourceMessageIndex: 0 }, question: "question", attachments: [], compressOldContext: false };
-const tick = () => new Promise((resolve) => setTimeout(resolve, 25));
+const payload = { conversationId: "c1", mainMessages: [{ index: 0, role: "user" as const, content: "q", links: [] }], quote: { text: "q", sourceRole: "user" as const, sourceMessageIndex: 0 }, question: "question", attachments: [], compressOldContext: false };
 
 let historyStore: { close: () => Promise<void> };
 beforeAll(async () => { ({ historyStore } = await import("../src/background/index")); });
@@ -51,8 +50,11 @@ describe("background listeners", () => {
     connect.listener?.(wrong);
     expect(wrong.onMessage.listener).toBeUndefined();
 
-    const pending = new Promise<string>(() => {});
-    stream.mockImplementation(() => pending);
+    let rejectPending: ((reason: unknown) => void) | undefined;
+    stream.mockImplementation(({ signal }) => new Promise<string>((_resolve, reject) => {
+      rejectPending = reject;
+      signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+    }));
     localGet.mockResolvedValueOnce({ "provider-config": { baseUrl: "https://api.example.com/v1", model: "model", contextWindowTokens: 4096, supportsImages: false }, "privacy-accepted": true });
     (globalThis.chrome.storage.session.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ "provider-api-key": { apiKey: "key", providerBaseUrl: "https://api.example.com/v1" } });
     const first = new FakePort("side-chat-stream");
@@ -61,19 +63,36 @@ describe("background listeners", () => {
     connect.listener?.(second);
     first.onMessage.listener?.({ type: "start", requestId: "r1", payload });
     first.onMessage.listener?.({ type: "start", requestId: "r1", payload });
-    await tick();
-    expect(stream).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(stream).toHaveBeenCalledOnce());
     second.onMessage.listener?.({ type: "abort", requestId: "r1" });
     expect(stream.mock.calls[0]?.[0].signal.aborted).toBe(false);
     first.onDisconnect.listener?.();
     expect(stream.mock.calls[0]?.[0].signal.aborted).toBe(true);
+    await vi.waitFor(() => expect(first.posted).toHaveLength(1));
+    expect(rejectPending).toBeDefined();
   });
 
   it("normalizes unknown runtime failures as storage failures", async () => {
     const response = vi.fn();
+    localGet.mockRejectedValueOnce(new Error("storage failed"));
     expect(message.listener?.({ type: "settings:get" }, {}, response)).toBe(true);
-    await tick();
-    expect(response).toHaveBeenCalledWith({ ok: false, error: { code: "STORAGE_FAILED", message: "The extension could not complete the request.", retryable: false } });
+    await vi.waitFor(() => expect(response).toHaveBeenCalledWith({ ok: false, error: { code: "STORAGE_FAILED", message: "The extension could not complete the request.", retryable: false } }));
+  });
+
+  it("aborts and settles active work before clearing its conversation", async () => {
+    stream.mockImplementation(({ signal }) => new Promise<string>((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+    }));
+    localGet.mockResolvedValueOnce({ "provider-config": { baseUrl: "https://api.example.com/v1", model: "model", contextWindowTokens: 4096, supportsImages: false }, "privacy-accepted": true });
+    (globalThis.chrome.storage.session.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ "provider-api-key": { apiKey: "key", providerBaseUrl: "https://api.example.com/v1" } });
+    const port = new FakePort("side-chat-stream");
+    connect.listener?.(port);
+    port.onMessage.listener?.({ type: "start", requestId: "clear", payload: { ...payload, conversationId: "clear-me" } });
+    await vi.waitFor(() => expect(stream).toHaveBeenCalled());
+    const response = vi.fn();
+    message.listener?.({ type: "history:clear", conversationId: "clear-me" }, {}, response);
+    await vi.waitFor(() => expect(stream.mock.calls.at(-1)?.[0].signal.aborted).toBe(true));
+    await vi.waitFor(() => expect(response).toHaveBeenCalledWith({ ok: true }));
   });
 
   it("normalizes unknown stream failures as retryable network failures", async () => {
@@ -84,7 +103,6 @@ describe("background listeners", () => {
     const port = new FakePort("side-chat-stream");
     connect.listener?.(port);
     port.onMessage.listener?.({ type: "start", requestId: "network", payload });
-    await tick();
-    expect(port.posted.at(-1)).toMatchObject({ type: "error", error: { code: "NETWORK_FAILED", retryable: true } });
+    await vi.waitFor(() => expect(port.posted.at(-1)).toMatchObject({ type: "error", error: { code: "NETWORK_FAILED", retryable: true } }));
   });
 });
