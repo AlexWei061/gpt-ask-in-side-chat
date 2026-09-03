@@ -28,7 +28,7 @@ export interface SideMessage {
   id: string;
   role: ChatRole;
   content: string;
-  quote: QuoteReference;
+  quote?: QuoteReference;
   status: "complete" | "incomplete";
   createdAt: string;
 }
@@ -44,7 +44,7 @@ export interface SendPayload {
   conversationId: string;
   mainMessages: MainMessage[];
   sideMessages: SideMessage[];
-  quote?: QuoteReference;
+  quote: QuoteReference;
   question: string;
   attachments: PreparedAttachment[];
   compressOldContext: boolean;
