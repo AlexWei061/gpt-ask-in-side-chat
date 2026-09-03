@@ -12,9 +12,12 @@ describe("side panel", () => {
   it("opens a quote without sending, then submits the exact explicit payload", () => {
     const onSend = vi.fn();
     const panel = new SidePanel(document, { onSend });
+    const host = document.querySelector<HTMLElement>("[data-side-chat-host]")!;
+    expect(host.style.display).toBe("none");
     panel.setConversation("conversation", []);
     panel.open(quote);
-    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    expect(host.style.display).toBe("");
+    const root = host.shadowRoot!;
     expect(root.textContent).toContain("selected words");
     expect(onSend).not.toHaveBeenCalled();
     const textarea = root.querySelector<HTMLTextAreaElement>("textarea")!;
@@ -23,6 +26,17 @@ describe("side panel", () => {
     root.querySelector<HTMLFormElement>("form")!.requestSubmit();
     expect(onSend).toHaveBeenCalledTimes(1);
     expect(onSend).toHaveBeenCalledWith({ question: "What does this mean?", quote, compressOldContext: false });
+    panel.destroy();
+  });
+
+  it("stays open but clears ephemeral state when the conversation changes", () => {
+    const panel = new SidePanel(document, { onSend: vi.fn() });
+    panel.setConversation("one", messages); panel.open(quote); panel.setError({ message: "old error", retryable: true });
+    panel.setConversation("two", []);
+    const host = document.querySelector<HTMLElement>("[data-side-chat-host]")!;
+    expect(host.style.display).toBe("");
+    expect(host.shadowRoot!.querySelector(".quote")).toBeNull();
+    expect(host.shadowRoot!.querySelector(".status")!.textContent).not.toContain("old error");
     panel.destroy();
   });
 
@@ -47,6 +61,18 @@ describe("side panel", () => {
     panel.destroy();
   });
 
+  it("replaces partial streaming output when retry starts", () => {
+    const panel = new SidePanel(document, { onSend: vi.fn() });
+    panel.setConversation("c", []); panel.open(quote);
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    const input = root.querySelector<HTMLTextAreaElement>("textarea")!; input.value = "retry me"; input.dispatchEvent(new Event("input")); root.querySelector<HTMLFormElement>("form")!.requestSubmit();
+    panel.appendDelta("old partial");
+    panel.setError({ message: "retry", retryable: true });
+    document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!.querySelector<HTMLButtonElement>("[data-action=retry]")!.click();
+    expect(document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!.textContent).not.toContain("old partial");
+    panel.destroy();
+  });
+
   it("shows incomplete history and restores the original body margin when closed", () => {
     document.body.style.marginRight = "17px";
     const panel = new SidePanel(document, { onSend: vi.fn() });
@@ -55,6 +81,7 @@ describe("side panel", () => {
     expect(host.shadowRoot!.textContent).toContain("Incomplete");
     expect(document.body.style.marginRight).toBe("420px");
     host.shadowRoot!.querySelector<HTMLButtonElement>("[data-action=close]")!.click();
+    expect(host.style.display).toBe("none");
     expect(document.body.style.marginRight).toBe("17px");
     panel.destroy();
   });
@@ -71,6 +98,17 @@ describe("side panel", () => {
     panel.destroy();
     document.dispatchEvent(new PointerEvent("pointermove", { clientX: 600 }));
     expect(onResize).toHaveBeenCalledTimes(1);
+  });
+
+  it("resizes with keyboard-accessible separator controls", () => {
+    const onResize = vi.fn(); const panel = new SidePanel(document, { onSend: vi.fn(), onResize });
+    panel.setConversation("c", []); panel.open(quote);
+    const handle = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!.querySelector<HTMLElement>("[data-resize-handle]")!;
+    expect(handle.getAttribute("role")).toBe("separator");
+    expect(handle.tabIndex).toBe(0);
+    handle.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    expect(onResize).toHaveBeenCalledTimes(1);
+    panel.destroy();
   });
 
   it("clears old conversation state when switched", () => {
