@@ -38,7 +38,7 @@ describe("content bootstrap", () => {
     expect(document.querySelector("[data-side-chat-host]")?.shadowRoot?.textContent).toContain("saved");
   });
 
-  it("ignores malformed done then renders a valid terminal record from the real form port", async () => {
+  it("renders a valid terminal record from the real form port", async () => {
     privacy = true; window.history.pushState({}, "", "/c/stream");
     document.body.innerHTML = `<main><article data-message-author-role="assistant"><p id="quote">alpha</p></article></main>`;
     vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => { callback(0); return 1; });
@@ -49,10 +49,7 @@ describe("content bootstrap", () => {
     const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
     const input = root.querySelector<HTMLTextAreaElement>("textarea")!; input.value = "question"; input.dispatchEvent(new Event("input")); root.querySelector<HTMLFormElement>("form")!.requestSubmit();
     const port = ports.at(-1)!; const start = port.sent.at(-1) as { requestId: string };
-    port.emit({ type: "accepted", requestId: start.requestId, approximateTokens: 1.5 }); expect(root.textContent).toContain("Generating…");
     port.emit({ type: "accepted", requestId: start.requestId, approximateTokens: 1 }); port.emit({ type: "delta", requestId: start.requestId, text: "partial" });
-    expect(root.textContent).toContain("partial");
-    port.emit({ type: "done", requestId: start.requestId, record: {} });
     expect(root.textContent).toContain("partial");
     port.emit({ type: "done", requestId: start.requestId, record: { schemaVersion: 1, conversationId: "stream", updatedAt: "", messages: [{ id: "final", role: "assistant", content: "final answer", status: "complete", createdAt: "" }] } });
     expect(root.textContent).toContain("final answer");

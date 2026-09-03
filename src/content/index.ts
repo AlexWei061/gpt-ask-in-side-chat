@@ -17,8 +17,13 @@ function request<T>(message: unknown): Promise<T> {
   }));
 }
 
-export async function bootstrap(): Promise<void> {
-  if (!(await request<PublicSettings>({ type: "settings:get" })).privacyAccepted) return;
+const BOOTSTRAP_KEY = "__sideChatBootstrapPromise";
+export function bootstrap(): Promise<void> {
+  const state = document as Document & { [BOOTSTRAP_KEY]?: Promise<void> };
+  return state[BOOTSTRAP_KEY] ?? (state[BOOTSTRAP_KEY] = bootstrapImpl());
+}
+async function bootstrapImpl(): Promise<void> {
+  if (!(await request<PublicSettings>({ type: "settings:get" })).privacyAccepted) { delete (document as Document & { [BOOTSTRAP_KEY]?: Promise<void> })[BOOTSTRAP_KEY]; return; }
   const adapter = new ChatGptPageAdapter(document);
   let stream: { port: chrome.runtime.Port; requestId: string; conversationId: string } | null = null;
   let generation = 0;
@@ -46,22 +51,24 @@ export async function bootstrap(): Promise<void> {
     } catch { if (!disposed && token === generation) panel.setNotice("Could not load side-chat history."); }
   }
   async function clear(): Promise<void> {
-    const id = adapter.getConversationId(); if (!id) return;
+    const token = ++generation; const id = adapter.getConversationId(); if (!id) return;
     disconnectStream(); panel.resetRequest();
-    try { await request({ type: "history:clear", conversationId: id }); if (adapter.getConversationId() === id) panel.setMessages([]); }
-    catch { panel.setNotice("Could not clear side-chat history."); }
+    try { await request({ type: "history:clear", conversationId: id }); if (!disposed && token === generation && adapter.getConversationId() === id) panel.setMessages([]); }
+    catch { if (!disposed && token === generation && adapter.getConversationId() === id) panel.setNotice("Could not clear side-chat history."); }
   }
   function start(submission: PanelSend): void {
+    generation += 1;
     const conversationId = adapter.getConversationId(); const extraction = adapter.extractConversation();
     if (!conversationId || !extraction.certain || extraction.messages.length === 0) { panel.setError({ message: "The complete visible conversation could not be verified.", retryable: true }); return; }
     disconnectStream(); const requestId = crypto.randomUUID(); const port = chrome.runtime.connect({ name: "side-chat-stream" }); stream = { port, requestId, conversationId };
     port.onMessage.addListener((raw: unknown) => {
-      if (!isStreamEvent(raw)) return;
+      const candidate = raw as { requestId?: unknown; type?: unknown } | null;
+      if (!isStreamEvent(raw)) { if (candidate?.requestId === requestId && typeof candidate.type === "string") { panel.setError({ message: "The side-chat response was invalid.", retryable: true }); disconnectStream(false); } return; }
       const event = raw;
       if (!stream || stream.port !== port || event.requestId !== stream.requestId) return;
       if (event.type === "accepted") panel.setAccepted();
       else if (event.type === "delta") panel.appendDelta(event.text);
-      else if (event.type === "done" && event.record.conversationId === stream.conversationId) { panel.complete(event.record.messages); disconnectStream(false); }
+      else if (event.type === "done") { if (event.record.conversationId === stream.conversationId) panel.complete(event.record.messages); else panel.setError({ message: "The side-chat response was invalid.", retryable: true }); disconnectStream(false); }
       else if (event.type === "error") { panel.setError({ message: event.error.message, retryable: event.error.retryable }); disconnectStream(false); }
     });
     port.onDisconnect.addListener(() => { if (stream?.port === port) { stream = null; panel.setError({ message: "The side-chat connection closed unexpectedly.", retryable: true }); } });
@@ -73,7 +80,7 @@ export async function bootstrap(): Promise<void> {
   const checkNavigation = () => { if (document.location.href !== url) { url = document.location.href; void loadConversation(); } };
   const observer = new MutationObserver(checkNavigation); observer.observe(document.documentElement, { childList: true, subtree: true });
   document.defaultView?.addEventListener("popstate", checkNavigation);
-  document.defaultView?.addEventListener("pagehide", () => { disposed = true; observer.disconnect(); document.defaultView?.removeEventListener("popstate", checkNavigation); disconnectStream(); selection.destroy(); panel.destroy(); }, { once: true });
+  document.defaultView?.addEventListener("pagehide", () => { disposed = true; observer.disconnect(); document.defaultView?.removeEventListener("popstate", checkNavigation); disconnectStream(); selection.destroy(); panel.destroy(); delete (document as Document & { [BOOTSTRAP_KEY]?: Promise<void> })[BOOTSTRAP_KEY]; }, { once: true });
   await loadConversation();
 }
 

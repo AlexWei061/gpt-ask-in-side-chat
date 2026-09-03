@@ -41,8 +41,8 @@ describe("side panel", () => {
   });
 
   it("sanitizes rendered markdown and safe-links it", () => {
-    const html = renderMarkdown("[bad](javascript:alert(1)) <img onerror=alert(1)><iframe></iframe>", document);
-    expect(html).not.toMatch(/javascript:|onerror|iframe/i);
+    const html = renderMarkdown("[bad](javascript:alert(1)) <img onerror=alert(1)><iframe></iframe><video></video><svg><a></a></svg><form><input autofocus><button>bad</button></form>", document);
+    expect(html).not.toMatch(/javascript:|onerror|iframe|video|svg|form|input|button|autofocus/i);
   });
 
   it("keeps draft before acceptance and retries the original payload once", () => {
