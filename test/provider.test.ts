@@ -79,6 +79,16 @@ describe("streamChatCompletion", () => {
     },
   );
 
+  it("rejects a partial delta at EOF after reporting the partial update", async () => {
+    const onDelta = vi.fn();
+    const error = await streamChatCompletion(args({
+      fetcher: vi.fn(async () => sseResponse('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n')),
+      onDelta,
+    })).catch((reason: unknown) => reason);
+    expect(onDelta).toHaveBeenCalledWith("partial");
+    expect(errorCode(error)).toBe("PROTOCOL_FAILED");
+  });
+
   it("parses all data lines with CR, LF, and CRLF separators while ignoring SSE metadata", async () => {
     const onDelta = vi.fn();
     const body = ": comment\r" + "event: message\r" + "id: 1\r" +
@@ -86,6 +96,12 @@ describe("streamChatCompletion", () => {
     await expect(streamChatCompletion(args({ fetcher: vi.fn(async () => sseResponse(body)), onDelta })))
       .resolves.toBe("Hello");
     expect(onDelta).toHaveBeenCalledWith("Hello");
+  });
+
+  it("accepts CRLF and mixed SSE blank-event boundaries", async () => {
+    const body = 'data: {"choices":[{"delta":{"content":"A"}}]}\r\n\r\n' +
+      'data: {"choices":[{"delta":{"content":"B"}}]}\n\r\n' + "data: [DONE]\r\n\r\n";
+    await expect(streamChatCompletion(args({ fetcher: vi.fn(async () => sseResponse(body)) }))).resolves.toBe("AB");
   });
 
   it("maps a reader failure to a retryable network error and releases the reader", async () => {
@@ -153,7 +169,7 @@ describe("streamChatCompletion", () => {
 
   it("rejects malformed provider envelopes without exposing payloads", async () => {
     const error = await streamChatCompletion(args({
-      fetcher: vi.fn(async () => sseResponse('data: {"error":{"message":"private payload"}}\n\n')),
+      fetcher: vi.fn(async () => sseResponse('data: {"error":{"message":"private payload"}}\n\ndata: [DONE]\n\n')),
     })).catch((reason: unknown) => reason);
     expect(errorCode(error)).toBe("PROTOCOL_FAILED");
     expect((error as Error).message).not.toContain("private payload");
@@ -161,7 +177,7 @@ describe("streamChatCompletion", () => {
 
   it("rejects a non-string delta content", async () => {
     const error = await streamChatCompletion(args({
-      fetcher: vi.fn(async () => sseResponse('data: {"choices":[{"delta":{"content":7}}]}\n\n')),
+      fetcher: vi.fn(async () => sseResponse('data: {"choices":[{"delta":{"content":7}}]}\n\ndata: [DONE]\n\n')),
     })).catch((reason: unknown) => reason);
     expect(errorCode(error)).toBe("PROTOCOL_FAILED");
   });
@@ -170,5 +186,15 @@ describe("streamChatCompletion", () => {
     const error = await streamChatCompletion(args({ fetcher: vi.fn(async () => sseResponse("", 408)) }))
       .catch((reason: unknown) => reason);
     expect(error).toMatchObject({ code: "NETWORK_FAILED", retryable: true });
+  });
+
+  it("cancels a non-OK response body without changing the sanitized status error", async () => {
+    const cancel = vi.fn(() => Promise.reject(new Error("private cancellation failure")));
+    const response = new Response(new ReadableStream<Uint8Array>({ cancel }), { status: 429 });
+    const error = await streamChatCompletion(args({ fetcher: vi.fn(async () => response) }))
+      .catch((reason: unknown) => reason);
+    expect(error).toMatchObject({ code: "RATE_LIMITED", retryable: true });
+    expect((error as Error).message).not.toContain("private cancellation failure");
+    expect(cancel).toHaveBeenCalledTimes(1);
   });
 });

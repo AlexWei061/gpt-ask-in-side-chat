@@ -97,7 +97,14 @@ export async function streamChatCompletion({
     throw new ExtensionError("NETWORK_FAILED", "Could not reach the AI provider.", true);
   }
 
-  if (!response.ok) throw responseError(response.status);
+  if (!response.ok) {
+    try {
+      await response.body?.cancel();
+    } catch {
+      // Keep the status error sanitized even when transport cleanup fails.
+    }
+    throw responseError(response.status);
+  }
   if (!response.body) {
     throw new ExtensionError("PROTOCOL_FAILED", "The AI provider returned no streaming response body.", true);
   }
@@ -124,7 +131,7 @@ export async function streamChatCompletion({
       }
 
       let boundary: RegExpMatchArray | null;
-      while ((boundary = /\r\n\r\n|\n\n|\r\r/.exec(buffer))) {
+      while ((boundary = /(?:\r\n|\r|\n){2}/.exec(buffer))) {
         const boundaryIndex = boundary.index ?? 0;
         const frame = buffer.slice(0, boundaryIndex);
         buffer = buffer.slice(boundaryIndex + boundary[0].length);
