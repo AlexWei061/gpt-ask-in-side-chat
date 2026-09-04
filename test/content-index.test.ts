@@ -38,6 +38,15 @@ describe("content bootstrap", () => {
     expect(document.querySelector("[data-side-chat-host]")).toBeNull();
   });
 
+  it("settles safely for malformed UI and history values", async () => {
+    privacy = true;
+    (chrome.runtime.sendMessage as unknown as (message: { type: string }, callback: (response: unknown) => void) => void) = (message, callback) => {
+      if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: true } }); else if (message.type === "ui:get") callback({ ok: true, value: { panelWidth: "bad" } }); else if (message.type === "history:load") callback({ ok: true, value: { schemaVersion: 1, conversationId: "wrong", updatedAt: "", messages: [] } }); else callback({ ok: false, error: { code: "NETWORK_FAILED", message: "x", retryable: "bad" } });
+    };
+    window.history.pushState({}, "", "/c/value"); const { bootstrapPromise } = await import("../src/content/index"); await bootstrapPromise;
+    expect(document.querySelector("[data-side-chat-host]")).toBeTruthy(); expect(document.querySelector("[data-side-chat-host]")?.shadowRoot?.textContent).not.toContain("wrong");
+  });
+
   it("loads current history", async () => {
     privacy = true; historyRecords.set("one", { schemaVersion: 1, conversationId: "one", updatedAt: "", messages: [{ id: "m", role: "assistant", content: "saved", status: "complete", createdAt: "" }] });
     window.history.pushState({}, "", "/c/one");

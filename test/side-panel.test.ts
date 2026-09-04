@@ -69,7 +69,7 @@ describe("side panel", () => {
   it("does not replace an active quote, but clears stale retry when a new quote opens", () => {
     const quoteB = { ...quote, text: "second" }; const onSend = vi.fn(); const panel = new SidePanel(document, { onSend }); panel.setConversation("c", []); panel.open(quote);
     const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!; const input = root.querySelector<HTMLTextAreaElement>("textarea")!; input.value = "ask"; input.dispatchEvent(new Event("input")); root.querySelector<HTMLFormElement>("form")!.requestSubmit(); panel.open(quoteB); expect(root.textContent).toContain("selected words");
-    panel.setError({ message: "retry", retryable: true }); panel.open(quoteB); expect(root.textContent).toContain("second"); expect(root.querySelector("[data-action=retry]")).toBeNull(); panel.destroy();
+    panel.setError({ message: "retry", retryable: true }); root.querySelector<HTMLButtonElement>("[data-action=retry]")!.click(); expect(onSend).toHaveBeenLastCalledWith(expect.objectContaining({ quote })); panel.setError({ message: "retry", retryable: true }); panel.open(quoteB); expect(root.textContent).toContain("second"); expect(root.querySelector("[data-action=retry]")).toBeNull(); panel.destroy();
   });
 
   it("replaces partial streaming output when retry starts", () => {
@@ -126,6 +126,12 @@ describe("side panel", () => {
     panel.destroy();
     document.dispatchEvent(new PointerEvent("pointermove", { clientX: 600 }));
     expect(onResize).toHaveBeenCalledTimes(1);
+  });
+
+  it("reclamps on viewport shrink and ends a pointercancel drag once", () => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1800 }); const onResize = vi.fn(); const panel = new SidePanel(document, { onSend: vi.fn(), onResize }); panel.setWidth(900); panel.setConversation("c", []); panel.open(quote);
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 700 }); window.dispatchEvent(new Event("resize")); const handle = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!.querySelector<HTMLElement>("[data-resize-handle]")!; expect(handle.getAttribute("aria-valuenow")).toBe("350");
+    handle.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: 300 })); document.dispatchEvent(new PointerEvent("pointercancel")); document.dispatchEvent(new PointerEvent("pointermove", { clientX: 0 })); expect(onResize).toHaveBeenCalledTimes(1); panel.destroy();
   });
 
   it("resizes with keyboard-accessible separator controls", () => {
