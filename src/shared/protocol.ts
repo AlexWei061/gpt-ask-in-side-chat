@@ -98,7 +98,7 @@ function isPreparedAttachment(value: unknown): value is PreparedAttachment {
   return value.kind === "image" && hasOnlyKeys(value, ["kind", "name", "sourceMessageIndex", "dataUrl"]) && typeof value.dataUrl === "string" && /^data:image\/[a-z0-9.+-]+;base64,(?=.+)(?:[a-z0-9+/]{4})*(?:[a-z0-9+/]{2}==|[a-z0-9+/]{3}=)?$/i.test(value.dataUrl);
 }
 
-function isProviderConfig(value: unknown): value is ProviderConfig {
+export function isProviderConfig(value: unknown): value is ProviderConfig {
   return isObject(value)
     && hasOnlyKeys(value, ["baseUrl", "model", "contextWindowTokens", "supportsImages"])
     && typeof value.baseUrl === "string" && value.baseUrl.trim().length > 0

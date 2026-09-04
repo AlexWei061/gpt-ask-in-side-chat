@@ -52,7 +52,7 @@ describe("content bootstrap", () => {
     ports = []; historyRecords = new Map(); privacy = false; window.history.replaceState({}, "", "/"); document.body.innerHTML = ""; document.querySelectorAll("[data-side-chat-host]").forEach((node) => node.remove());
     Object.defineProperty(globalThis, "chrome", { configurable: true, value: { runtime: {
       sendMessage: (message: { type: string; conversationId?: string }, callback: (response: unknown) => void) => {
-        if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: privacy } });
+        if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: privacy, config: null } });
         else if (message.type === "ui:get") callback({ ok: true, value: { panelWidth: 420 } });
         else if (message.type === "history:load") callback({ ok: true, value: historyRecords.get(message.conversationId!) ?? null });
         else callback({ ok: true });
@@ -74,10 +74,17 @@ describe("content bootstrap", () => {
     expect(document.querySelector("[data-side-chat-host]")).toBeNull();
   });
 
+  it("fails closed when public provider configuration is missing or malformed", async () => {
+    privacy = true;
+    (chrome.runtime.sendMessage as unknown as (message: { type: string }, callback: (response: unknown) => void) => void) = (_message, callback) => callback({ ok: true, value: { privacyAccepted: true, config: { baseUrl: "https://api.example.com", model: "", contextWindowTokens: 1.5, supportsImages: "yes" } } });
+    const { bootstrapPromise } = await import("../src/content/index"); await bootstrapPromise;
+    expect(document.querySelector("[data-side-chat-host]")).toBeNull();
+  });
+
   it("settles safely for malformed UI and history values", async () => {
     privacy = true;
     (chrome.runtime.sendMessage as unknown as (message: { type: string }, callback: (response: unknown) => void) => void) = (message, callback) => {
-      if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: true } }); else if (message.type === "ui:get") callback({ ok: true, value: { panelWidth: "bad" } }); else if (message.type === "history:load") callback({ ok: true, value: { schemaVersion: 1, conversationId: "wrong", updatedAt: "", messages: [] } }); else callback({ ok: false, error: { code: "NETWORK_FAILED", message: "x", retryable: "bad" } });
+      if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: true, config: null } }); else if (message.type === "ui:get") callback({ ok: true, value: { panelWidth: "bad" } }); else if (message.type === "history:load") callback({ ok: true, value: { schemaVersion: 1, conversationId: "wrong", updatedAt: "", messages: [] } }); else callback({ ok: false, error: { code: "NETWORK_FAILED", message: "x", retryable: "bad" } });
     };
     window.history.pushState({}, "", "/c/value"); const { bootstrapPromise } = await import("../src/content/index"); await bootstrapPromise;
     expect(document.querySelector("[data-side-chat-host]")).toBeTruthy(); expect(document.querySelector("[data-side-chat-host]")?.shadowRoot?.textContent).not.toContain("wrong");
@@ -111,6 +118,18 @@ describe("content bootstrap", () => {
     expect(root.textContent).not.toContain("ignored");
   });
 
+  it("prompts for a fetched attachment that fails local preparation, then explicitly skips it", async () => {
+    privacy = true; window.history.pushState({}, "", "/c/attachment");
+    document.body.innerHTML = `<main><article data-message-author-role="assistant"><p id="quote">alpha</p><a download="empty.pdf" href="https://chatgpt.com/file">empty.pdf</a></article></main>`;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(new Blob(["x"], { type: "application/pdf" }), { status: 200 })));
+    const { bootstrapPromise } = await import("../src/content/index"); await bootstrapPromise;
+    const root = openAndSubmit("question");
+    await vi.waitFor(() => expect(root.querySelector("dialog")).toBeTruthy());
+    root.querySelector<HTMLButtonElement>("[data-action=continue-without-files]")!.click();
+    await vi.waitFor(() => expect(ports).toHaveLength(1));
+    expect((ports[0]!.sent[0] as { payload: { attachments: unknown[] } }).payload.attachments).toEqual([]);
+  });
+
   it("shows a usable retry after an unexpected disconnect from the real request port", async () => {
     privacy = true; window.history.pushState({}, "", "/c/disconnect");
     document.body.innerHTML = `<main><article data-message-author-role="assistant"><p id="quote">alpha</p></article></main>`;
@@ -128,7 +147,7 @@ describe("content bootstrap", () => {
     privacy = true; window.history.pushState({}, "", "/c/clear");
     let clearCompleted = false;
     (chrome.runtime.sendMessage as unknown as (message: { type: string; conversationId?: string }, callback: (response: unknown) => void) => void) = (message, callback) => {
-      if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: true } }); else if (message.type === "ui:get") callback({ ok: true, value: { panelWidth: 420 } }); else if (message.type === "history:load") callback({ ok: true, value: null }); else if (message.type === "history:clear") { clearCompleted = true; callback({ ok: true }); } else callback({ ok: true });
+      if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: true, config: null } }); else if (message.type === "ui:get") callback({ ok: true, value: { panelWidth: 420 } }); else if (message.type === "history:load") callback({ ok: true, value: null }); else if (message.type === "history:clear") { clearCompleted = true; callback({ ok: true }); } else callback({ ok: true });
     };
     document.body.innerHTML = `<main><article data-message-author-role="assistant"><p id="quote">alpha</p></article></main>`; vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => { callback(0); return 1; }); Object.defineProperty(window, "confirm", { configurable: true, value: () => true });
     const { bootstrapPromise } = await import("../src/content/index"); await bootstrapPromise;
@@ -143,7 +162,7 @@ describe("content bootstrap", () => {
     privacy = true; window.history.pushState({}, "", "/c/old");
     let oldCallback: ((response: unknown) => void) | undefined;
     (chrome.runtime.sendMessage as unknown as (message: { type: string; conversationId?: string }, callback: (response: unknown) => void) => void) = (message, callback) => {
-      if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: true } });
+      if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: true, config: null } });
       else if (message.type === "ui:get") callback({ ok: true, value: { panelWidth: 420 } });
       else if (message.type === "history:load" && message.conversationId === "old") oldCallback = callback;
       else if (message.type === "history:load") callback({ ok: true, value: { schemaVersion: 1, conversationId: "new", updatedAt: "", messages: [{ id: "new", role: "assistant", content: "NEW", status: "complete", createdAt: "" }] } }); else callback({ ok: true });
@@ -161,7 +180,7 @@ describe("content bootstrap", () => {
     installSelectableMessage();
     let loadCallback: ((response: unknown) => void) | undefined;
     (chrome.runtime.sendMessage as unknown as (message: { type: string }, callback: (response: unknown) => void) => void) = (message, callback) => {
-      if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: true } });
+      if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: true, config: null } });
       else if (message.type === "ui:get") callback({ ok: true, value: { panelWidth: 420 } });
       else if (message.type === "history:load") loadCallback = callback;
       else callback({ ok: true });
@@ -186,7 +205,7 @@ describe("content bootstrap", () => {
     Object.defineProperty(window, "confirm", { configurable: true, value: () => true });
     let loadCallback: ((response: unknown) => void) | undefined;
     (chrome.runtime.sendMessage as unknown as (message: { type: string }, callback: (response: unknown) => void) => void) = (message, callback) => {
-      if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: true } });
+      if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: true, config: null } });
       else if (message.type === "ui:get") callback({ ok: true, value: { panelWidth: 420 } });
       else if (message.type === "history:load") loadCallback = callback;
       else callback({ ok: true });

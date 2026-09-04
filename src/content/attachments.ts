@@ -47,8 +47,9 @@ export async function prepareFile(file: File, sourceMessageIndex: number, suppor
   if (!Number.isInteger(sourceMessageIndex) || sourceMessageIndex < 0 || !validName(file.name) || file.size > ATTACHMENT_MAX_BYTES) throw failed();
   try {
     if (file.type.startsWith("image/")) {
-      if (!supportsImages) throw failed();
-      return { kind: "image", name: file.name, sourceMessageIndex, dataUrl: await dataUrl(file) };
+      if (!supportsImages || file.size === 0) throw failed();
+      const encoded = await dataUrl(file); if (!/^data:image\/[a-z0-9.+-]+;base64,(?=.+)/i.test(encoded)) throw failed();
+      return { kind: "image", name: file.name, sourceMessageIndex, dataUrl: encoded };
     }
     if (pdfFile(file)) {
       const text = await pdfParser(file);
@@ -76,6 +77,7 @@ export function extractAttachmentDescriptors(elements: Element[]): AttachmentDes
       if (!isVisible(node)) continue;
       const anchor = node instanceof HTMLAnchorElement && node.hasAttribute("download") ? node : node.querySelector<HTMLAnchorElement>("a[download]");
       if (!anchor && !node.getAttribute("data-testid")?.toLowerCase().includes("attachment")) continue;
+      if (anchor && !isVisible(anchor)) continue;
       const name = nodeName(node); if (!name) continue;
       const url = anchor?.href || null;
       const key = `${sourceMessageIndex}\u0000${url ?? ""}\u0000${name}`;

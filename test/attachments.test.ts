@@ -28,6 +28,12 @@ describe("attachment preparation", () => {
     const image = file("image.png", "image bytes", "image/png");
     await expect(prepareFile(image, 0, false)).rejects.toMatchObject({ code: "ATTACHMENT_FAILED" });
     await expect(prepareFile(image, 0, true)).resolves.toMatchObject({ kind: "image", name: "image.png", sourceMessageIndex: 0, dataUrl: expect.stringMatching(/^data:image\/png;base64,.+$/) });
+    await expect(prepareFile(file("empty.png", "", "image/png"), 0, true)).rejects.toMatchObject({ code: "ATTACHMENT_FAILED" });
+  });
+
+  it("does not recover an anchor nested in hidden attachment UI", () => {
+    document.body.innerHTML = `<article><div data-testid="attachment"><span hidden><a download="hidden.txt" href="/hidden">hidden.txt</a></span></div><a download="shown.txt" href="/shown">shown.txt</a></article>`;
+    expect(extractAttachmentDescriptors(Array.from(document.querySelectorAll("article")))).toEqual([{ name: "shown.txt", sourceMessageIndex: 0, url: "http://localhost:3000/shown" }]);
   });
 });
 

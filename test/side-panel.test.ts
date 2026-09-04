@@ -185,4 +185,13 @@ describe("side panel", () => {
     const pendingDestroy = panel.resolveMissingAttachments(["two.txt"]); panel.destroy();
     await expect(pendingDestroy).resolves.toBeNull();
   });
+
+  it("settles a pending missing-file resolver when normal state rendering replaces the dialog", async () => {
+    const panel = new SidePanel(document, { onSend: vi.fn() });
+    const pending = panel.resolveMissingAttachments(["one.txt"]);
+    panel.setConversation("other", []);
+    await expect(pending).resolves.toBeNull();
+    expect(document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!.querySelector("dialog")).toBeNull();
+    panel.destroy();
+  });
 });

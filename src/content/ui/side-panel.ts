@@ -55,6 +55,7 @@ export class SidePanel {
   private clamp(width: number): number { const max = Math.min(960, Math.max(320, Math.floor((this.document.defaultView?.innerWidth ?? 1920) / 2))); return Math.max(320, Math.min(max, Math.round(width))); }
   private syncWidth(): void { const panel = this.root.querySelector<HTMLElement>(".panel"); panel?.style.setProperty("--side-chat-width", `${this.width}px`); this.root.querySelector<HTMLElement>("[data-resize-handle]")?.setAttribute("aria-valuenow", String(this.width)); }
   private render(): void {
+    this.closeMissingResolver(null);
     this.cancelStreamFrame();
     this.root.innerHTML = ""; const style = this.document.createElement("style"); style.textContent = sidePanelStyles; this.root.append(style);
     const panel = this.document.createElement("section"); panel.className = "panel"; panel.style.setProperty("--side-chat-width", `${this.width}px`);

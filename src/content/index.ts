@@ -1,4 +1,4 @@
-import type { RuntimeResponse, StreamServerMessage } from "../shared/protocol";
+import { isProviderConfig, type RuntimeResponse, type StreamServerMessage } from "../shared/protocol";
 import type { ProviderConfig, SideChatRecord } from "../shared/types";
 import type { ExtensionErrorCode } from "../shared/errors";
 import { ChatGptPageAdapter } from "./page-adapter";
@@ -136,7 +136,8 @@ async function resolveAttachments(descriptors: AttachmentDescriptor[], supportsI
     let file: File | null;
     try { file = await fetchAttachment(descriptor, document.location.origin); } catch { file = null; }
     if (!file) { missing.push(descriptor); continue; }
-    prepared.push(await prepareFile(file, descriptor.sourceMessageIndex, supportsImages));
+    try { prepared.push(await prepareFile(file, descriptor.sourceMessageIndex, supportsImages)); }
+    catch { missing.push(descriptor); }
   }
   if (missing.length === 0) return prepared;
   const replacements = await panel.resolveMissingAttachments(missing.map((descriptor) => descriptor.name));
@@ -166,8 +167,7 @@ function isRuntimeError(value: unknown): value is { code: ExtensionErrorCode; me
     && (!("retryable" in value) || typeof (value as { retryable?: unknown }).retryable === "boolean"));
 }
 function isSettings(value: unknown): value is PublicSettings {
-  const config = (value as Partial<PublicSettings> | null)?.config;
-  return Boolean(value && typeof value === "object" && typeof (value as PublicSettings).privacyAccepted === "boolean" && (config === undefined || config === null || Boolean(config && typeof config === "object" && typeof config.supportsImages === "boolean" && typeof config.baseUrl === "string" && typeof config.model === "string" && typeof config.contextWindowTokens === "number")));
+  return Boolean(value && typeof value === "object" && typeof (value as PublicSettings).privacyAccepted === "boolean" && (value as { config?: unknown }).config !== undefined && ((value as PublicSettings).config === null || isProviderConfig((value as PublicSettings).config)));
 }
 function isUi(value: unknown): value is UiPreferences { return Boolean(value && typeof value === "object" && typeof (value as UiPreferences).panelWidth === "number" && Number.isFinite((value as UiPreferences).panelWidth)); }
 function isQuote(value: unknown): boolean { return Boolean(value && typeof value === "object" && typeof (value as { text?: unknown }).text === "string" && ((value as { sourceRole?: unknown }).sourceRole === "user" || (value as { sourceRole?: unknown }).sourceRole === "assistant") && Number.isInteger((value as { sourceMessageIndex?: unknown }).sourceMessageIndex) && (value as { sourceMessageIndex: number }).sourceMessageIndex >= 0); }
