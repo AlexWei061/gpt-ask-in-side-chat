@@ -3,13 +3,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const savedConfig = { baseUrl: "https://api.example.com/v1", model: "model-a", contextWindowTokens: 128000, supportsImages: true };
 
 function installChrome(settings: unknown, permission = true) {
+  const initialConfig = (settings as { config?: typeof savedConfig | null })?.config;
+  const origins = new Set(initialConfig ? [`${new URL(initialConfig.baseUrl).origin}/*`] : []);
   const sendMessage = vi.fn((message: { type: string }, callback: (response: unknown) => void) => {
     if (message.type === "settings:get") callback({ ok: true, value: settings });
     else callback({ ok: true });
   });
-  const request = vi.fn(async () => permission);
-  Object.defineProperty(globalThis, "chrome", { configurable: true, value: { runtime: { sendMessage, lastError: null }, permissions: { request } } });
-  return { sendMessage, request };
+  const request = vi.fn(async ({ origins: requested }: { origins: string[] }) => { if (permission) requested.forEach((origin) => origins.add(origin)); return permission; });
+  const contains = vi.fn(async () => true);
+  const remove = vi.fn(async ({ origins: removed }: { origins: string[] }) => { removed.forEach((origin) => origins.delete(origin)); return true; });
+  const getAll = vi.fn(async () => ({ origins: [...origins] }));
+  Object.defineProperty(globalThis, "chrome", { configurable: true, value: { runtime: { sendMessage, lastError: null }, permissions: { request, contains, remove, getAll } } });
+  return { sendMessage, request, contains, remove, getAll };
 }
 
 async function loadOptions(): Promise<void> {
@@ -75,5 +80,28 @@ describe("options onboarding", () => {
     await vi.waitFor(() => expect(document.querySelector("#status")?.textContent).toMatch(/forgotten/i));
     document.querySelector<HTMLButtonElement>("#clear")!.click();
     await vi.waitFor(() => expect(chromeMock.sendMessage).toHaveBeenCalledWith({ type: "history:clear-all" }, expect.any(Function)));
+  });
+
+  it("removes a previously granted provider origin after switching endpoints", async () => {
+    const chromeMock = installChrome({ config: savedConfig, privacyAccepted: true, hasSessionKey: true });
+    await loadOptions();
+    document.querySelector<HTMLInputElement>("#base-url")!.value = "https://new.example/v1";
+    document.querySelector<HTMLInputElement>("#api-key")!.value = "new-key";
+    document.querySelector<HTMLFormElement>("#settings")!.requestSubmit();
+    await vi.waitFor(() => expect(chromeMock.remove).toHaveBeenCalledWith({ origins: ["https://api.example.com/*"] }));
+    expect(chromeMock.request).toHaveBeenCalledWith({ origins: ["https://new.example/*"] });
+  });
+
+  it("retries stale endpoint permission cleanup after a transient removal failure", async () => {
+    const chromeMock = installChrome({ config: savedConfig, privacyAccepted: true, hasSessionKey: true });
+    chromeMock.remove.mockResolvedValueOnce(false);
+    await loadOptions();
+    document.querySelector<HTMLInputElement>("#base-url")!.value = "https://new.example/v1";
+    document.querySelector<HTMLInputElement>("#api-key")!.value = "new-key";
+    document.querySelector<HTMLFormElement>("#settings")!.requestSubmit();
+    await vi.waitFor(() => expect(document.querySelector("#status")?.textContent).toMatch(/could not be removed/i));
+    document.querySelector<HTMLFormElement>("#settings")!.requestSubmit();
+    await vi.waitFor(() => expect(chromeMock.remove).toHaveBeenCalledTimes(2));
+    expect(chromeMock.remove).toHaveBeenLastCalledWith({ origins: ["https://api.example.com/*"] });
   });
 });

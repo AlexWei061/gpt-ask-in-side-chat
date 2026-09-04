@@ -16,7 +16,7 @@ app.innerHTML = `
   <h1>Side Chat Companion</h1>
   <section class="disclosure" aria-labelledby="disclosure-title">
     <h2 id="disclosure-title">Before you continue</h2>
-    <p>When you send a side-chat question, this extension reads all messages visible in the current ChatGPT conversation. It sends those messages, your selected quote, your question, and any attachments you explicitly approve directly to the model endpoint you configure.</p>
+    <p>When you open the side chat, this extension counts messages visible in the current ChatGPT conversation. When you send a side-chat question, it reads and sends those messages, your selected quote, your question, and any attachments you explicitly approve directly to the model endpoint you configure.</p>
     <p>The extension developer has no backend for this product and does not receive your conversations, API key, side-chat history, or analytics. Your model provider processes submitted data under its own terms and privacy policy.</p>
     <label class="check"><input id="privacy" type="checkbox"> I understand and agree to this data use.</label>
   </section>
@@ -86,6 +86,13 @@ async function run(action: () => Promise<void>): Promise<void> {
   finally { setBusy(false); }
 }
 
+async function removeUnusedEndpointPermissions(currentPattern: string): Promise<boolean> {
+  const permissions = await chrome.permissions.getAll();
+  const staleOrigins = (permissions.origins ?? []).filter((origin) => origin !== currentPattern && origin !== "https://chatgpt.com/*");
+  const results = await Promise.all(staleOrigins.map((origin) => chrome.permissions.remove({ origins: [origin] })));
+  return results.every(Boolean);
+}
+
 async function initialize(): Promise<void> {
   const settings = await send<PublicSettings>({ type: "settings:get" });
   if (!isPublicSettings(settings)) throw new Error("Saved provider settings could not be read.");
@@ -105,7 +112,8 @@ form.addEventListener("submit", (event) => {
   void run(async () => {
     if (!privacy.checked) throw new Error("Accept the privacy disclosure before saving.");
     const config = normalizeProviderConfig({ baseUrl: baseUrl.value, model: model.value, contextWindowTokens: Number(contextWindow.value), supportsImages: images.checked });
-    const granted = await chrome.permissions.request({ origins: [permissionPattern(config.baseUrl)] });
+    const newPattern = permissionPattern(config.baseUrl);
+    const granted = await chrome.permissions.request({ origins: [newPattern] });
     if (!granted) throw new Error("Endpoint permission was not granted.");
     await send({ type: "settings:save", config, privacyAccepted: true });
     const enteredKey = apiKey.value.trim();
@@ -113,7 +121,9 @@ form.addEventListener("submit", (event) => {
     else if (loadedBaseUrl !== null && loadedBaseUrl !== config.baseUrl) hasSessionKey = false;
     loadedBaseUrl = config.baseUrl;
     apiKey.placeholder = hasSessionKey ? "A key is already set; leave blank to keep it" : "Enter a key for this Chrome session";
-    show(hasSessionKey ? "Settings saved for this Chrome session." : "Settings saved. Enter an API key before testing or asking.");
+    const removedOldPermission = await removeUnusedEndpointPermissions(newPattern);
+    if (!removedOldPermission) show("Settings saved, but the previous endpoint permission could not be removed.", "error");
+    else show(hasSessionKey ? "Settings saved for this Chrome session." : "Settings saved. Enter an API key before testing or asking.");
   });
 });
 

@@ -130,6 +130,19 @@ describe("content bootstrap", () => {
     expect((ports[0]!.sent[0] as { payload: { attachments: unknown[] } }).payload.attachments).toEqual([]);
   });
 
+  it("does not send when the missing-attachment dialog is canceled", async () => {
+    privacy = true; window.history.pushState({}, "", "/c/attachment-cancel");
+    document.body.innerHTML = `<main><article data-message-author-role="assistant"><p id="quote">alpha</p><a download="empty.pdf" href="https://chatgpt.com/file">empty.pdf</a></article></main>`;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(new Blob(["x"], { type: "application/pdf" }), { status: 200 })));
+    const { bootstrapPromise } = await import("../src/content/index"); await bootstrapPromise;
+    const root = openAndSubmit("question");
+    await vi.waitFor(() => expect(root.querySelector("dialog")).toBeTruthy());
+    root.querySelector<HTMLDialogElement>("dialog")!.dispatchEvent(new Event("cancel"));
+    await vi.waitFor(() => expect(root.textContent).toContain("No request was sent"));
+    expect(ports).toHaveLength(0);
+    expect(root.querySelector<HTMLTextAreaElement>("textarea")!.disabled).toBe(false);
+  });
+
   it("uses credentials only for same-origin attachment downloads", async () => {
     const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(new Blob(["text"], { type: "text/plain" }), { status: 200 }));
     const { bootstrapPromise, fetchAttachment } = await import("../src/content/index"); await bootstrapPromise;

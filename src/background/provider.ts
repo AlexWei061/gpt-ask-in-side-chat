@@ -37,6 +37,26 @@ function protocolError(): ExtensionError {
   return new ExtensionError("PROTOCOL_FAILED", "The AI provider sent an invalid streaming response.", true);
 }
 
+function streamedProviderError(value: unknown): ExtensionError {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw protocolError();
+  const error = value as { code?: unknown; type?: unknown };
+  const identifier = [error.code, error.type]
+    .filter((candidate): candidate is string => typeof candidate === "string" && candidate.trim().length > 0)
+    .join(" ")
+    .toLowerCase();
+  if (!identifier) throw protocolError();
+  if (identifier.includes("rate_limit") || identifier.includes("insufficient_quota")) {
+    return new ExtensionError("RATE_LIMITED", "The AI provider rate limit was reached.", true);
+  }
+  if (identifier.includes("auth") || identifier.includes("api_key") || identifier.includes("unauthorized")) {
+    return new ExtensionError("AUTHENTICATION_FAILED", "Authentication with the AI provider failed.");
+  }
+  if (identifier.includes("context_length") || identifier.includes("context_window") || identifier.includes("too_many_tokens")) {
+    return new ExtensionError("CONTEXT_OVERFLOW", "The request exceeds the configured provider context window.");
+  }
+  return new ExtensionError("NETWORK_FAILED", "The AI provider rejected the streamed request.");
+}
+
 function lineEndingLength(value: string, index: number, allowTrailingCr = false): number {
   if (value[index] === "\n") return 1;
   if (value[index] !== "\r") return 0;
@@ -75,7 +95,8 @@ function processFrame(frame: string, onDelta: (content: string) => void): { cont
     throw protocolError();
   }
 
-  if (!event || typeof event !== "object" || Array.isArray(event) || "error" in event) throw protocolError();
+  if (!event || typeof event !== "object" || Array.isArray(event)) throw protocolError();
+  if ("error" in event) throw streamedProviderError((event as { error?: unknown }).error);
   const choices = (event as { choices?: unknown }).choices;
   if (choices === undefined) return { content: "", done: false };
   if (!Array.isArray(choices) || choices.length === 0) return { content: "", done: false };

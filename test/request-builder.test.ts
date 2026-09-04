@@ -48,7 +48,7 @@ describe("buildChatMessages", () => {
     expect(result[2]!.content).toContain("Partial side-chat response (incomplete):\npartial answer");
   });
 
-  it("replaces old main and side context with an explicit compressed summary", () => {
+  it("replaces old main context with an explicit summary while preserving side-chat history", () => {
     const result = messages({
       mainMessages: [{ index: 0, role: "user", content: "old main", links: [] }],
       sideMessages: [{ id: "s1", role: "assistant", content: "old side", status: "complete", createdAt: new Date(0).toISOString() }],
@@ -59,9 +59,9 @@ describe("buildChatMessages", () => {
     expect(quotedPayload(result[1]!.content)).toEqual({
       context: { compressed: true, summary: "faithful summary" }, attachments: [],
     });
-    expect(result.map((message) => message.role)).toEqual(["system", "user", "user"]);
+    expect(result.map((message) => message.role)).toEqual(["system", "user", "assistant", "user"]);
     expect(serialized).not.toContain("old main");
-    expect(serialized).not.toContain("old side");
+    expect(serialized).toContain("old side");
   });
 
   it("puts text attachments in context and image attachments in multimodal content", () => {

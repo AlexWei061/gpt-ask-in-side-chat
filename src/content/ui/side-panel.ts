@@ -3,34 +3,38 @@ import { sidePanelStyles } from "./styles";
 import { renderMarkdown } from "./markdown";
 
 export type PanelSend = { question: string; quote: QuoteReference; compressOldContext: boolean };
-export type PanelError = { message: string; retryable: boolean };
+export type PanelContextSummary = { capturedMessages: number; endpointOrigin: string; model: string; contextWindowTokens: number; approximateTokens?: number };
+export type PanelError = { message: string; retryable: boolean; diagnostic?: string };
 export interface SidePanelOptions { onSend: (payload: PanelSend) => void; onClear?: () => void; onResize?: (width: number) => void; }
 
 export class SidePanel {
   private readonly host: HTMLElement; private readonly root: ShadowRoot; private width = 420;
   private originalMargin: { value: string; priority: string } | null = null; private conversationId: string | null = null; private messages: SideMessage[] = [];
   private quote: QuoteReference | null = null; private draft = ""; private error: PanelError | null = null; private lastSubmission: PanelSend | null = null;
+  private contextSummary: PanelContextSummary | null = null;
   private busy = false; private accepted = false; private stream = ""; private resizing = false; private openState = false; private notice = ""; private streamFrame: number | null = null;
-  private missingResolver: ((files: File[] | null) => void) | null = null; private missingDialog: HTMLDialogElement | null = null;
+  private missingResolver: ((files: File[] | null | undefined) => void) | null = null; private missingDialog: HTMLDialogElement | null = null;
   constructor(private readonly document: Document, private readonly options: SidePanelOptions) {
     this.host = document.createElement("aside"); this.host.dataset.sideChatHost = "true"; this.host.setAttribute("aria-label", "Side chat"); this.root = this.host.attachShadow({ mode: "open" });
     document.documentElement.append(this.host); this.host.style.display = "none"; document.defaultView?.addEventListener("resize", this.viewportResize); this.render();
   }
   setWidth(width: number): void { this.width = this.clamp(width); this.syncWidth(); this.applyMargin(); }
-  setConversation(id: string | null, messages: SideMessage[]): void { this.conversationId = id; this.messages = messages; this.quote = null; this.draft = ""; this.error = null; this.notice = ""; this.lastSubmission = null; this.busy = false; this.accepted = false; this.stream = ""; this.render(); this.syncOpenState(); }
+  setConversation(id: string | null, messages: SideMessage[]): void { this.conversationId = id; this.messages = messages; this.quote = null; this.draft = ""; this.error = null; this.notice = ""; this.lastSubmission = null; this.contextSummary = null; this.busy = false; this.accepted = false; this.stream = ""; this.render(); this.syncOpenState(); }
   setMessages(messages: SideMessage[]): void { this.messages = messages; this.stream = ""; this.render(); }
-  open(quote: QuoteReference): void { if (this.busy) return; this.openState = true; this.quote = quote; this.error = null; this.notice = ""; this.stream = ""; this.lastSubmission = null; if (this.originalMargin === null) this.originalMargin = { value: this.document.body.style.getPropertyValue("margin-right"), priority: this.document.body.style.getPropertyPriority("margin-right") }; this.applyMargin(); this.render(); this.syncOpenState(); this.root.querySelector<HTMLTextAreaElement>("textarea")?.focus(); }
+  open(quote: QuoteReference, contextSummary?: PanelContextSummary): void { if (this.busy) return; this.openState = true; this.quote = quote; this.contextSummary = contextSummary ?? this.contextSummary; this.error = null; this.notice = ""; this.stream = ""; this.lastSubmission = null; if (this.originalMargin === null) this.originalMargin = { value: this.document.body.style.getPropertyValue("margin-right"), priority: this.document.body.style.getPropertyPriority("margin-right") }; this.applyMargin(); this.render(); this.syncOpenState(); this.root.querySelector<HTMLTextAreaElement>("textarea")?.focus(); }
+  setContextSummary(contextSummary: PanelContextSummary): void { this.contextSummary = contextSummary; this.render(); }
+  setExtractionError(capturedMessages: number, hasConversationId: boolean): void { this.quote = null; this.contextSummary = this.contextSummary ? { ...this.contextSummary, capturedMessages } : null; this.setError({ message: `The complete visible conversation could not be verified (${capturedMessages} messages found).`, retryable: true, diagnostic: JSON.stringify({ capturedMessageCount: capturedMessages, stableConversationId: hasConversationId, pageSupported: false }, null, 2) }); }
   close(): void { this.openState = false; this.quote = null; this.restoreMargin(); this.render(); this.syncOpenState(); }
   setError(error: PanelError | null): void { this.error = error; this.notice = ""; this.busy = false; this.accepted = false; this.render(); }
   setNotice(message: string): void { this.notice = message; this.render(); }
   resetRequest(): void { this.busy = false; this.accepted = false; this.stream = ""; this.error = null; this.lastSubmission = null; this.render(); }
-  setAccepted(): void { this.accepted = true; this.busy = true; this.draft = ""; this.error = null; this.render(); }
+  setAccepted(approximateTokens?: number): void { this.accepted = true; this.busy = true; this.draft = ""; this.error = null; if (this.contextSummary && approximateTokens !== undefined) this.contextSummary = { ...this.contextSummary, approximateTokens }; this.render(); }
   setBusy(busy: boolean): void { this.busy = busy; this.render(); }
   appendDelta(delta: string): void { this.stream += delta; if (this.streamFrame !== null) return; const view = this.document.defaultView; if (!view) { this.updateStream(); return; } let fired = false; let frame: number | null = null; frame = view.requestAnimationFrame(() => { fired = true; if (this.streamFrame === frame) this.streamFrame = null; this.updateStream(); }); this.streamFrame = fired ? null : frame; }
   complete(messages: SideMessage[]): void { this.messages = messages; this.stream = ""; this.busy = false; this.accepted = false; this.error = null; this.lastSubmission = null; this.render(); }
-  destroy(): void { this.closeMissingResolver(null); this.cancelStreamFrame(); this.document.removeEventListener("pointermove", this.move); this.document.removeEventListener("pointerup", this.up); this.document.removeEventListener("pointercancel", this.up); this.document.defaultView?.removeEventListener("blur", this.up); this.document.defaultView?.removeEventListener("resize", this.viewportResize); this.restoreMargin(); this.host.remove(); }
-  resolveMissingAttachments(names: string[]): Promise<File[] | null> {
-    this.closeMissingResolver(null);
+  destroy(): void { this.closeMissingResolver(undefined); this.cancelStreamFrame(); this.document.removeEventListener("pointermove", this.move); this.document.removeEventListener("pointerup", this.up); this.document.removeEventListener("pointercancel", this.up); this.document.defaultView?.removeEventListener("blur", this.up); this.document.defaultView?.removeEventListener("resize", this.viewportResize); this.restoreMargin(); this.host.remove(); }
+  resolveMissingAttachments(names: string[]): Promise<File[] | null | undefined> {
+    this.closeMissingResolver(undefined);
     return new Promise((resolve) => {
       this.missingResolver = resolve;
       const dialog = this.document.createElement("dialog"); dialog.setAttribute("aria-label", "Reselect missing attachments"); dialog.dataset.missingAttachments = "true";
@@ -41,12 +45,12 @@ export class SidePanel {
       const error = this.document.createElement("p"); error.setAttribute("role", "alert");
       const reselect = this.button("Reselect files", "reselect-files", () => { const files = Array.from(input.files ?? []); if (files.length !== names.length) { error.textContent = `Select exactly ${names.length} files.`; return; } this.closeMissingResolver(files); });
       const skip = this.button("Continue without these files", "continue-without-files", () => this.closeMissingResolver(null));
-      dialog.addEventListener("cancel", (event) => { event.preventDefault(); this.closeMissingResolver(null); });
+      dialog.addEventListener("cancel", (event) => { event.preventDefault(); this.closeMissingResolver(undefined); });
       dialog.append(title, explanation, list, input, error, reselect, skip); this.root.append(dialog); this.missingDialog = dialog;
       try { dialog.showModal(); } catch { dialog.setAttribute("open", ""); }
     });
   }
-  private closeMissingResolver(files: File[] | null): void { const resolve = this.missingResolver; this.missingResolver = null; const dialog = this.missingDialog; this.missingDialog = null; try { dialog?.close(); } catch { /* absent dialog support */ } dialog?.remove(); resolve?.(files); }
+  private closeMissingResolver(files: File[] | null | undefined): void { const resolve = this.missingResolver; this.missingResolver = null; const dialog = this.missingDialog; this.missingDialog = null; try { dialog?.close(); } catch { /* absent dialog support */ } dialog?.remove(); resolve?.(files); }
   private syncOpenState(): void { this.host.style.display = this.openState ? "" : "none"; if (this.openState) this.applyMargin(); }
   private applyMargin(): void { if (this.openState) this.document.body.style.setProperty("margin-right", `${this.width}px`, "important"); }
   private restoreMargin(): void { if (this.originalMargin !== null) { if (this.originalMargin.value) this.document.body.style.setProperty("margin-right", this.originalMargin.value, this.originalMargin.priority); else this.document.body.style.removeProperty("margin-right"); this.originalMargin = null; } }
@@ -55,15 +59,16 @@ export class SidePanel {
   private clamp(width: number): number { const max = Math.min(960, Math.max(320, Math.floor((this.document.defaultView?.innerWidth ?? 1920) / 2))); return Math.max(320, Math.min(max, Math.round(width))); }
   private syncWidth(): void { const panel = this.root.querySelector<HTMLElement>(".panel"); panel?.style.setProperty("--side-chat-width", `${this.width}px`); this.root.querySelector<HTMLElement>("[data-resize-handle]")?.setAttribute("aria-valuenow", String(this.width)); }
   private render(): void {
-    this.closeMissingResolver(null);
+    this.closeMissingResolver(undefined);
     this.cancelStreamFrame();
     this.root.innerHTML = ""; const style = this.document.createElement("style"); style.textContent = sidePanelStyles; this.root.append(style);
     const panel = this.document.createElement("section"); panel.className = "panel"; panel.style.setProperty("--side-chat-width", `${this.width}px`);
     const resize = this.document.createElement("div"); resize.className = "resize"; resize.dataset.resizeHandle = "true"; resize.setAttribute("aria-label", "Resize side chat"); resize.setAttribute("role", "separator"); resize.setAttribute("aria-orientation", "vertical"); resize.setAttribute("aria-valuemin", "320"); resize.setAttribute("aria-valuemax", String(this.clamp(960))); resize.setAttribute("aria-valuenow", String(this.width)); resize.tabIndex = 0; resize.addEventListener("pointerdown", this.down); resize.addEventListener("keydown", this.keyResize); panel.append(resize);
     const header = this.document.createElement("header"); const title = this.document.createElement("strong"); title.textContent = "Side chat"; header.append(title);
     header.append(this.button("Clear", "clear", () => { if (this.document.defaultView?.confirm?.("Clear side-chat history?") ?? true) this.options.onClear?.(); })); header.append(this.button("Close", "close", () => this.close())); panel.append(header);
+    if (this.contextSummary) { const summary = this.document.createElement("div"); summary.className = "context-summary"; const limit = this.contextSummary.contextWindowTokens > 0 ? this.contextSummary.contextWindowTokens.toLocaleString("en-US") : "Not configured"; const approximate = this.contextSummary.approximateTokens === undefined ? "calculated when sent" : this.contextSummary.approximateTokens.toLocaleString("en-US"); summary.textContent = `${this.contextSummary.capturedMessages} captured messages · Destination: ${this.contextSummary.endpointOrigin} · Model: ${this.contextSummary.model} · Approx. tokens: ${approximate} / ${limit}`; panel.append(summary); }
     const list = this.document.createElement("div"); list.className = "messages"; list.setAttribute("role", "log"); list.setAttribute("aria-live", "polite"); if (this.quote) { const preview = this.document.createElement("div"); preview.className = "message user"; const quoted = this.document.createElement("div"); quoted.className = "quote"; quoted.textContent = this.quote.text; preview.append(quoted); list.append(preview); } for (const message of this.messages) list.append(this.message(message)); if (this.stream) { const stream = this.message({ id:"stream", role:"assistant", content:this.stream, status:"incomplete", createdAt:"" }); stream.dataset.streamMessage = "true"; list.append(stream); } panel.append(list);
-    const status = this.document.createElement("div"); status.className = "status"; status.setAttribute("aria-live", "polite"); if (this.error) { status.setAttribute("role", "alert"); status.textContent = this.error.message; if (this.error.retryable && this.lastSubmission) status.append(this.button("Retry", "retry", () => this.send(this.lastSubmission!))); } else if (this.notice) status.textContent = this.notice; else if (this.busy) status.textContent = "Generating…"; panel.append(status);
+    const status = this.document.createElement("div"); status.className = "status"; status.setAttribute("aria-live", "polite"); if (this.error) { status.setAttribute("role", "alert"); status.textContent = this.error.message; if (this.error.diagnostic) { const diagnostic = this.error.diagnostic; status.append(this.button("Copy diagnostics", "copy-diagnostics", () => { void this.document.defaultView?.navigator.clipboard?.writeText(diagnostic).then(() => this.setNotice("Diagnostics copied."), () => this.setNotice("Could not copy diagnostics.")); })); } if (this.error.retryable && this.lastSubmission) status.append(this.button("Retry", "retry", () => this.send(this.lastSubmission!))); } else if (this.notice) status.textContent = this.notice; else if (this.busy) status.textContent = "Generating…"; panel.append(status);
     const form = this.document.createElement("form"); const textarea = this.document.createElement("textarea"); textarea.setAttribute("aria-label", "Question for side chat"); textarea.placeholder = "Ask about this selection…"; textarea.value = this.draft; textarea.disabled = !this.quote || !this.conversationId || this.busy; textarea.addEventListener("input", () => { this.draft = textarea.value; const send = form.querySelector<HTMLButtonElement>("[data-action=send]"); if (send) send.disabled = !this.canSend(); }); form.append(textarea);
     const controls = this.document.createElement("div"); controls.className = "controls"; const label = this.document.createElement("label"); const checkbox = this.document.createElement("input"); checkbox.type = "checkbox"; checkbox.checked = this.lastSubmission?.compressOldContext ?? false; label.append(checkbox, " Compress old context only if needed; it becomes summarized, non-verbatim."); const send = this.button("Send", "send", () => {}, true); send.disabled = !this.canSend(); controls.append(label, send); form.append(controls);
     form.addEventListener("submit", (event) => { event.preventDefault(); const question = this.draft.trim(); if (!question || !this.quote || !this.conversationId || this.busy) return; this.send({ question, quote: this.quote, compressOldContext: checkbox.checked }); }); panel.append(form); this.root.append(panel);

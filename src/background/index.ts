@@ -1,7 +1,7 @@
 import { ChatService } from "./chat-service";
 import { HistoryStore } from "./history-store";
 import { streamChatCompletion } from "./provider";
-import { chatCompletionsUrl } from "./permissions";
+import { chatCompletionsUrl, permissionPattern } from "./permissions";
 import {
   clampPanelWidth,
   forgetSessionKey,
@@ -20,6 +20,7 @@ export const historyStore = new HistoryStore();
 const chatService = new ChatService({
   history: historyStore,
   loadSettings: loadInternalSettings,
+  hasHostPermission: (baseUrl) => chrome.permissions.contains({ origins: [permissionPattern(baseUrl)] }),
   stream: (args) => streamChatCompletion({ ...args, fetcher: fetch }),
 });
 type ActiveRequest = { controller: AbortController; promise: Promise<unknown> };
@@ -114,6 +115,9 @@ async function testProviderConnection(): Promise<void> {
   if (!settings.privacyAccepted) throw new ExtensionError("PERMISSION_REQUIRED", "Accept the privacy disclosure first.");
   if (!settings.config) throw new ExtensionError("PERMISSION_REQUIRED", "Configure a model endpoint first.");
   if (!settings.apiKey) throw new ExtensionError("KEY_REQUIRED", "Enter an API key for this Chrome session.");
+  if (!await chrome.permissions.contains({ origins: [permissionPattern(settings.config.baseUrl)] })) {
+    throw new ExtensionError("PERMISSION_REQUIRED", "The configured endpoint permission is missing. Save settings to grant access again.");
+  }
   await streamChatCompletion({
     fetcher: fetch,
     url: chatCompletionsUrl(settings.config.baseUrl),

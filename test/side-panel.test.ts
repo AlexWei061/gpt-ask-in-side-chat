@@ -29,6 +29,28 @@ describe("side panel", () => {
     panel.destroy();
   });
 
+  it("shows the captured boundary, destination, model, limit, and accepted token estimate", () => {
+    const panel = new SidePanel(document, { onSend: vi.fn() });
+    panel.setConversation("conversation", []);
+    panel.open(quote, { capturedMessages: 7, endpointOrigin: "https://api.example.com", model: "model-a", contextWindowTokens: 128000 });
+    let text = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!.textContent ?? "";
+    expect(text).toContain("7 captured messages"); expect(text).toContain("https://api.example.com"); expect(text).toContain("model-a"); expect(text).toContain("128,000");
+    panel.setAccepted(2345);
+    text = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!.textContent ?? "";
+    expect(text).toContain("2,345");
+    panel.destroy();
+  });
+
+  it("offers content-free diagnostics for an uncertain extraction", () => {
+    const panel = new SidePanel(document, { onSend: vi.fn() });
+    panel.setConversation("conversation", []); panel.open(quote);
+    panel.setExtractionError(2, true);
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    expect(root.textContent).toContain("2 messages"); expect(root.querySelector("[data-action=copy-diagnostics]")).toBeTruthy();
+    expect(root.textContent).not.toContain("selected words");
+    panel.destroy();
+  });
+
   it("stays open but clears ephemeral state when the conversation changes", () => {
     const panel = new SidePanel(document, { onSend: vi.fn() });
     panel.setConversation("one", messages); panel.open(quote); panel.setError({ message: "old error", retryable: true });
@@ -181,16 +203,16 @@ describe("side panel", () => {
     const pending = panel.resolveMissingAttachments(["one.txt"]);
     const dialog = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!.querySelector<HTMLDialogElement>("dialog")!;
     dialog.dispatchEvent(new Event("cancel"));
-    await expect(pending).resolves.toBeNull();
+    await expect(pending).resolves.toBeUndefined();
     const pendingDestroy = panel.resolveMissingAttachments(["two.txt"]); panel.destroy();
-    await expect(pendingDestroy).resolves.toBeNull();
+    await expect(pendingDestroy).resolves.toBeUndefined();
   });
 
   it("returns an exact successful reselection and cancels a replaced resolver", async () => {
     const panel = new SidePanel(document, { onSend: vi.fn() });
     const replaced = panel.resolveMissingAttachments(["old.txt"]);
     const selected = panel.resolveMissingAttachments(["one.txt", "two.txt"]);
-    await expect(replaced).resolves.toBeNull();
+    await expect(replaced).resolves.toBeUndefined();
     const dialog = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!.querySelector<HTMLDialogElement>("dialog")!;
     const files = [new File(["one"], "one.txt"), new File(["two"], "two.txt")];
     Object.defineProperty(dialog.querySelector<HTMLInputElement>("input[type=file]")!, "files", { configurable: true, value: files });
@@ -203,7 +225,7 @@ describe("side panel", () => {
     const panel = new SidePanel(document, { onSend: vi.fn() });
     const pending = panel.resolveMissingAttachments(["one.txt"]);
     panel.setConversation("other", []);
-    await expect(pending).resolves.toBeNull();
+    await expect(pending).resolves.toBeUndefined();
     expect(document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!.querySelector("dialog")).toBeNull();
     panel.destroy();
   });

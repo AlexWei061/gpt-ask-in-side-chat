@@ -32,6 +32,7 @@ function createService(overrides: Partial<ChatServiceDependencies> = {}) {
     service: new ChatService({
       history,
       loadSettings: async () => ({ config, privacyAccepted: true, apiKey: "key" }),
+      hasHostPermission: async () => true,
       stream,
       ...overrides,
     }),
@@ -79,6 +80,12 @@ describe("ChatService", () => {
     const { service } = createService();
     const error = await service.send({ ...payload, attachments: [{ kind: "image", name: "a.png", sourceMessageIndex: 0, dataUrl: "data:image/png;base64,AA" }] }, new AbortController().signal, () => {}).catch((reason: unknown) => reason);
     expect(errorCode(error)).toBe("ATTACHMENT_FAILED");
+  });
+
+  it("requires the configured runtime host permission before contacting the provider", async () => {
+    const { service, stream } = createService({ hasHostPermission: async () => false });
+    await expect(service.send(payload, new AbortController().signal, () => {})).rejects.toMatchObject({ code: "PERMISSION_REQUIRED" });
+    expect(stream).not.toHaveBeenCalled();
   });
 
   it("uses persisted history rather than client-supplied history", async () => {

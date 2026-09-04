@@ -191,6 +191,19 @@ describe("streamChatCompletion", () => {
     expect((error as Error).message).not.toContain("private payload");
   });
 
+  it.each([
+    ["rate_limit_exceeded", "RATE_LIMITED", true],
+    ["invalid_api_key", "AUTHENTICATION_FAILED", false],
+    ["context_length_exceeded", "CONTEXT_OVERFLOW", false],
+    ["provider_failure", "NETWORK_FAILED", false],
+  ] as const)("maps a streamed %s provider error envelope without exposing its message", async (providerCode, code, retryable) => {
+    const error = await streamChatCompletion(args({
+      fetcher: vi.fn(async () => sseResponse(`data: {"error":{"code":"${providerCode}","message":"private detail"}}\n\n`)),
+    })).catch((reason: unknown) => reason);
+    expect(error).toMatchObject({ code, retryable });
+    expect((error as Error).message).not.toContain("private detail");
+  });
+
   it("rejects a non-string delta content", async () => {
     const error = await streamChatCompletion(args({
       fetcher: vi.fn(async () => sseResponse('data: {"choices":[{"delta":{"content":7}}]}\n\ndata: [DONE]\n\n')),

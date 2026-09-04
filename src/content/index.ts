@@ -4,7 +4,7 @@ import type { ExtensionErrorCode } from "../shared/errors";
 import { ChatGptPageAdapter } from "./page-adapter";
 import { extractAttachmentDescriptors, prepareFile, type AttachmentDescriptor } from "./attachments";
 import { SelectionController } from "./selection";
-import { SidePanel, type PanelSend } from "./ui/side-panel";
+import { SidePanel, type PanelContextSummary, type PanelSend } from "./ui/side-panel";
 
 type PublicSettings = { privacyAccepted: boolean; config: ProviderConfig | null };
 type UiPreferences = { panelWidth: number };
@@ -46,7 +46,15 @@ async function bootstrapImpl(): Promise<void> {
     onResize: (width) => { void request({ type: "ui:set-width", width }).catch(() => panel.setNotice("Could not save panel width.")); },
     onClear: () => clear(),
   });
-  const selection = new SelectionController(document, (quote) => panel.open(quote));
+  const contextSummary = (capturedMessages: number): PanelContextSummary => ({
+    capturedMessages,
+    endpointOrigin: publicSettings.config ? new URL(publicSettings.config.baseUrl).origin : "Not configured",
+    model: publicSettings.config?.model ?? "Not configured",
+    contextWindowTokens: publicSettings.config?.contextWindowTokens ?? 0,
+  });
+  const selection = new SelectionController(document, (quote) => {
+    panel.open(quote, contextSummary(adapter.getMessageElements().length));
+  });
   async function loadConversation(): Promise<void> {
     const token = ++generation; disconnectStream();
     const conversationId = adapter.getConversationId(); panel.setConversation(conversationId, []);
@@ -65,7 +73,8 @@ async function bootstrapImpl(): Promise<void> {
   async function start(submission: PanelSend): Promise<void> {
     const token = ++generation;
     const conversationId = adapter.getConversationId(); const elements = adapter.getMessageElements(); const extraction = adapter.extractConversation(elements);
-    if (!conversationId || !extraction.certain || extraction.messages.length === 0) { panel.setError({ message: "The complete visible conversation could not be verified.", retryable: true }); return; }
+    panel.setContextSummary(contextSummary(extraction.messages.length));
+    if (!conversationId || !extraction.certain || extraction.messages.length === 0) { panel.setExtractionError(extraction.messages.length, Boolean(conversationId)); return; }
     const descriptors = extractAttachmentDescriptors(elements);
     let attachments: import("../shared/types").PreparedAttachment[] = [];
     if (descriptors.length > 0) {
@@ -85,7 +94,7 @@ async function bootstrapImpl(): Promise<void> {
       if (!stream || stream.port !== port || candidate?.requestId !== stream.requestId) return;
       if (!isStreamEvent(raw)) { panel.setError({ message: "The side-chat response was invalid.", retryable: true }); disconnectStream(false); return; }
       const event = raw;
-      if (event.type === "accepted") panel.setAccepted();
+      if (event.type === "accepted") panel.setAccepted(event.approximateTokens);
       else if (event.type === "delta") panel.appendDelta(event.text);
       else if (event.type === "done") { if (event.record.conversationId === stream.conversationId) panel.complete(event.record.messages); else panel.setError({ message: "The side-chat response was invalid.", retryable: true }); disconnectStream(false); }
       else if (event.type === "error") { panel.setError({ message: event.error.message, retryable: event.error.retryable }); disconnectStream(false); }
@@ -141,6 +150,7 @@ async function resolveAttachments(descriptors: AttachmentDescriptor[], supportsI
   }
   if (missing.length === 0) return prepared;
   const replacements = await panel.resolveMissingAttachments(missing.map((descriptor) => descriptor.name));
+  if (replacements === undefined) throw new Error("Attachment selection was canceled. No request was sent.");
   if (replacements === null) return prepared;
   if (replacements.length !== missing.length) throw new Error("The missing attachment selection was incomplete.");
   for (const [index, file] of replacements.entries()) prepared.push(await prepareFile(file, missing[index]!.sourceMessageIndex, supportsImages));

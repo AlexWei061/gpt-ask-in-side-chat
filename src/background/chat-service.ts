@@ -11,6 +11,7 @@ export type ChatServiceEvent = { type: "accepted"; approximateTokens: number } |
 export type ChatServiceDependencies = {
   history: History;
   loadSettings: () => Promise<InternalSettings>;
+  hasHostPermission: (baseUrl: string) => Promise<boolean>;
   stream: (args: Omit<StreamArgs, "fetcher">) => Promise<string>;
 };
 
@@ -40,6 +41,11 @@ export class ChatService {
       throw new ExtensionError("PERMISSION_REQUIRED", "Accept the privacy notice and configure a provider before sending a question.");
     }
     if (!settings.apiKey) throw new ExtensionError("KEY_REQUIRED", "Set an API key before sending a question.");
+    let hasHostPermission = false;
+    try { hasHostPermission = await this.dependencies.hasHostPermission(settings.config.baseUrl); } catch { /* treat unreadable permission state as missing */ }
+    if (!hasHostPermission) {
+      throw new ExtensionError("PERMISSION_REQUIRED", "The configured endpoint permission is missing. Open extension settings and grant access again.");
+    }
     const configuredSettings = { ...settings, config: settings.config, apiKey: settings.apiKey };
     if (payload.attachments.some((attachment) => attachment.kind === "image") && !settings.config.supportsImages) {
       throw new ExtensionError("ATTACHMENT_FAILED", "The configured provider does not support image attachments.");
@@ -59,7 +65,7 @@ export class ChatService {
       assertWithinBudget(approximateTokens, settings.config.contextWindowTokens);
     } catch (error) {
       if (!(error instanceof ExtensionError) || error.code !== "CONTEXT_OVERFLOW" || !payload.compressOldContext) throw error;
-      const summary = await this.compress(payload, priorMessages, configuredSettings, signal);
+      const summary = await this.compress(payload, configuredSettings, signal);
       messages = this.buildRequest(payload, priorMessages, summary);
       approximateTokens = estimateTokens(JSON.stringify(messages));
       assertWithinBudget(approximateTokens, settings.config.contextWindowTokens);
@@ -109,16 +115,15 @@ export class ChatService {
     return buildChatMessages({ ...payload, sideMessages, compressedSummary });
   }
 
-  private async compress(payload: SendPayload, sideMessages: SideMessage[], settings: InternalSettings & { config: NonNullable<InternalSettings["config"]>; apiKey: string }, signal: AbortSignal): Promise<string> {
+  private async compress(payload: SendPayload, settings: InternalSettings & { config: NonNullable<InternalSettings["config"]>; apiKey: string }, signal: AbortSignal): Promise<string> {
     const tokenBudget = Math.floor(settings.config.contextWindowTokens * 0.35);
     const contentBudget = tokenBudget - estimateTokens(JSON.stringify(compressionMessages(""))) - 1;
     if (!Number.isFinite(contentBudget) || contentBudget <= 0) {
       throw new ExtensionError("PROTOCOL_FAILED", "The provider context window cannot support context compression.");
     }
-    const values = [
-      ...payload.mainMessages.map((message) => JSON.stringify(message)),
-      ...sideMessages.map((message) => JSON.stringify(message)),
-    ].flatMap((value) => splitForCompression(value, contentBudget));
+    const values = payload.mainMessages
+      .map((message) => JSON.stringify(message))
+      .flatMap((value) => splitForCompression(value, contentBudget));
     const chunks = partitionForCompression(values, contentBudget)
       .flatMap((chunk) => splitForProviderCompression(chunk.join("\n"), tokenBudget));
     const summaries: string[] = [];

@@ -33,6 +33,7 @@ Object.assign(globalThis, {
       local: { get: localGet, set: vi.fn(), setAccessLevel: vi.fn() },
       session: { get: vi.fn(async (..._keys: unknown[]): Promise<Record<string, unknown>> => ({})), set: vi.fn(), remove: vi.fn(), setAccessLevel: vi.fn() },
     },
+    permissions: { contains: vi.fn(async () => true) },
   },
 });
 
@@ -104,6 +105,15 @@ describe("background listeners", () => {
     (globalThis.chrome.storage.session.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce({});
     const response = vi.fn();
     message.listener?.({ type: "provider:test" }, {}, response);
+    await vi.waitFor(() => expect(response).toHaveBeenCalledWith({ ok: false, error: expect.objectContaining({ code: "PERMISSION_REQUIRED" }) }));
+    expect(stream).not.toHaveBeenCalled();
+  });
+
+  it("reports a missing runtime host permission before contacting the provider", async () => {
+    localGet.mockResolvedValueOnce({ "provider-config": { baseUrl: "https://api.example.com/v1", model: "model", contextWindowTokens: 4096, supportsImages: false }, "privacy-accepted": true });
+    (globalThis.chrome.storage.session.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ "provider-api-key": { apiKey: "session-key", providerBaseUrl: "https://api.example.com/v1" } });
+    (globalThis.chrome.permissions.contains as ReturnType<typeof vi.fn>).mockResolvedValueOnce(false);
+    const response = vi.fn(); message.listener?.({ type: "provider:test" }, {}, response);
     await vi.waitFor(() => expect(response).toHaveBeenCalledWith({ ok: false, error: expect.objectContaining({ code: "PERMISSION_REQUIRED" }) }));
     expect(stream).not.toHaveBeenCalled();
   });
