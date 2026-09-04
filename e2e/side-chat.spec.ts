@@ -17,7 +17,9 @@ test("selection opens a docked side chat whose history survives reload", async (
         `--load-extension=${path.resolve("dist")}`,
       ],
     });
-    const fixture = await readFile("test/fixtures/chatgpt-page.html", "utf8");
+    const fixture = (await readFile("test/fixtures/chatgpt-page.html", "utf8"))
+      .replaceAll("<article", "<div")
+      .replaceAll("</article>", "</div>");
     await context.route("https://chatgpt.com/c/demo", (route) => route.fulfill({ contentType: "text/html", body: fixture }));
     await context.route("https://api.example.test/v1/chat/completions", async (route) => {
       providerRequest = route.request().postDataJSON();
@@ -47,7 +49,7 @@ test("selection opens a docked side chat whose history survives reload", async (
 
     const page = await context.newPage();
     await page.goto("https://chatgpt.com/c/demo");
-    const selectedText = page.locator("article[data-message-author-role=assistant] p").first();
+    const selectedText = page.locator("[data-message-author-role=assistant] p").first();
     await selectedText.selectText();
     await page.getByRole("button", { name: "Ask in side chat" }).click();
 

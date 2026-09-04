@@ -15,7 +15,7 @@ export function quoteFromRange(range: Range, adapter: ChatGptPageAdapter): Quote
   const extraction = adapter.extractConversation();
   if (!extraction.certain) return null;
 
-  const candidates = Array.from(startMessage.ownerDocument.querySelectorAll<HTMLElement>("main article"));
+  const candidates = adapter.getMessageElements();
   const sourceMessageIndex = candidates.indexOf(startMessage as HTMLElement);
   const message = extraction.messages[sourceMessageIndex];
   if (!message || message.index !== sourceMessageIndex || message.role !== sourceRole) return null;

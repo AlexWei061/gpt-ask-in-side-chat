@@ -1,7 +1,8 @@
 import { isVisible, serializeMessage } from "./extractor";
 import type { ChatRole, MainMessage } from "../shared/types";
 
-export const MESSAGE_SELECTOR = "article[data-message-author-role]";
+export const MESSAGE_SELECTOR = "[data-message-author-role]";
+const MAIN_MESSAGE_CANDIDATE_SELECTOR = "main article, main [data-message-author-role]";
 
 export interface ExtractionResult {
   messages: MainMessage[];
@@ -24,7 +25,7 @@ export class ChatGptPageAdapter {
     return element?.closest(MESSAGE_SELECTOR) ?? null;
   }
 
-  getMessageElements(): HTMLElement[] { return Array.from(this.document.querySelectorAll<HTMLElement>("main article")); }
+  getMessageElements(): HTMLElement[] { return Array.from(this.document.querySelectorAll<HTMLElement>(MAIN_MESSAGE_CANDIDATE_SELECTOR)); }
 
   extractConversation(candidates = this.getMessageElements()): ExtractionResult {
     const messages: MainMessage[] = [];

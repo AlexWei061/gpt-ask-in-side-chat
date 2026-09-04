@@ -27,6 +27,14 @@ describe("selection", () => {
     expect(quoteFromRange(range, new ChatGptPageAdapter(document))).toBeNull();
   });
 
+  it("creates a quote from ChatGPT div message containers", () => {
+    document.body.innerHTML = `<main><div data-message-author-role="assistant"><p id="a">current markup</p></div></main>`;
+    const range = document.createRange();
+    range.selectNodeContents(document.querySelector("#a")!);
+
+    expect(quoteFromRange(range, new ChatGptPageAdapter(document))).toEqual({ text: "current markup", sourceRole: "assistant", sourceMessageIndex: 0 });
+  });
+
   it("uses the adapter's ordered main-message index", () => {
     document.body.innerHTML = `<article data-message-author-role="assistant"><p>outside</p></article><main><article data-message-author-role="assistant"><p id="a">inside</p></article></main>`;
     const range = document.createRange();
