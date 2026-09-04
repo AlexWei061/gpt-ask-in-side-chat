@@ -24,6 +24,12 @@ describe("runtime protocol guards", () => {
     expect(isRuntimeRequest({ type: "ui:set-width", width: 420 })).toBe(true);
     expect(isRuntimeRequest({ type: "ui:set-width", width: 1200 })).toBe(false);
   });
+  it("accepts only exact zero-payload runtime requests", () => {
+    for (const type of ["settings:get", "key:forget", "provider:test", "ui:get", "history:clear-all"]) {
+      expect(isRuntimeRequest({ type })).toBe(true);
+      expect(isRuntimeRequest({ type, url: "https://attacker.invalid" })).toBe(false);
+    }
+  });
   it("accepts only complete provider configuration when saving settings", () => {
     const config = { baseUrl: "https://api.example.com/v1", model: "model-a", contextWindowTokens: 4096, supportsImages: false };
     expect(isRuntimeRequest({ type: "settings:save", config, privacyAccepted: true })).toBe(true);

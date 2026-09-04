@@ -84,6 +84,30 @@ describe("background listeners", () => {
     await vi.waitFor(() => expect(response).toHaveBeenCalledWith({ ok: false, error: { code: "STORAGE_FAILED", message: "The extension could not complete the request.", retryable: false } }));
   });
 
+  it("tests only the saved provider endpoint with the session-bound key", async () => {
+    localGet.mockResolvedValueOnce({ "provider-config": { baseUrl: "https://api.example.com/v1", model: "model", contextWindowTokens: 4096, supportsImages: false }, "privacy-accepted": true });
+    (globalThis.chrome.storage.session.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ "provider-api-key": { apiKey: "session-key", providerBaseUrl: "https://api.example.com/v1" } });
+    stream.mockResolvedValueOnce("OK");
+    const response = vi.fn();
+    expect(message.listener?.({ type: "provider:test" }, {}, response)).toBe(true);
+    await vi.waitFor(() => expect(response).toHaveBeenCalledWith({ ok: true }));
+    expect(stream).toHaveBeenCalledWith(expect.objectContaining({
+      url: "https://api.example.com/v1/chat/completions",
+      apiKey: "session-key",
+      model: "model",
+      messages: [{ role: "user", content: "Reply with OK." }],
+    }));
+  });
+
+  it("refuses a provider test until disclosure, config, and a session key are present", async () => {
+    localGet.mockResolvedValueOnce({ "provider-config": { baseUrl: "https://api.example.com/v1", model: "model", contextWindowTokens: 4096, supportsImages: false }, "privacy-accepted": false });
+    (globalThis.chrome.storage.session.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce({});
+    const response = vi.fn();
+    message.listener?.({ type: "provider:test" }, {}, response);
+    await vi.waitFor(() => expect(response).toHaveBeenCalledWith({ ok: false, error: expect.objectContaining({ code: "PERMISSION_REQUIRED" }) }));
+    expect(stream).not.toHaveBeenCalled();
+  });
+
   it("aborts and settles active work before clearing its conversation", async () => {
     stream.mockImplementation(({ signal }) => new Promise<string>((_resolve, reject) => {
       signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });

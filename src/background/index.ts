@@ -1,6 +1,7 @@
 import { ChatService } from "./chat-service";
 import { HistoryStore } from "./history-store";
 import { streamChatCompletion } from "./provider";
+import { chatCompletionsUrl } from "./permissions";
 import {
   clampPanelWidth,
   forgetSessionKey,
@@ -91,6 +92,7 @@ async function handleRuntimeRequest(request: RuntimeRequest): Promise<RuntimeRes
       }
       case "key:set": await setSessionKey(request.apiKey); return { ok: true };
       case "key:forget": await forgetSessionKey(); return { ok: true };
+      case "provider:test": await testProviderConnection(); return { ok: true };
       case "ui:get": return { ok: true, value: await loadUiPreferences() };
       case "ui:set-width": {
         const width = clampPanelWidth(request.width);
@@ -105,6 +107,22 @@ async function handleRuntimeRequest(request: RuntimeRequest): Promise<RuntimeRes
   } catch (error) {
     return { ok: false, error: normalizeError(error) };
   }
+}
+
+async function testProviderConnection(): Promise<void> {
+  const settings = await loadInternalSettings();
+  if (!settings.privacyAccepted) throw new ExtensionError("PERMISSION_REQUIRED", "Accept the privacy disclosure first.");
+  if (!settings.config) throw new ExtensionError("PERMISSION_REQUIRED", "Configure a model endpoint first.");
+  if (!settings.apiKey) throw new ExtensionError("KEY_REQUIRED", "Enter an API key for this Chrome session.");
+  await streamChatCompletion({
+    fetcher: fetch,
+    url: chatCompletionsUrl(settings.config.baseUrl),
+    apiKey: settings.apiKey,
+    model: settings.config.model,
+    messages: [{ role: "user", content: "Reply with OK." }],
+    signal: new AbortController().signal,
+    onDelta: () => undefined,
+  });
 }
 
 function addActive(conversationId: string, active: ActiveRequest): void {

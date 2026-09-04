@@ -6,6 +6,7 @@ export type RuntimeRequest =
   | { type: "settings:save"; config: ProviderConfig; privacyAccepted: boolean }
   | { type: "key:set"; apiKey: string }
   | { type: "key:forget" }
+  | { type: "provider:test" }
   | { type: "ui:get" }
   | { type: "ui:set-width"; width: number }
   | { type: "history:load"; conversationId: string }
@@ -37,11 +38,11 @@ function isNonEmptyString(value: unknown): value is string {
 export function isRuntimeRequest(value: unknown): value is RuntimeRequest {
   if (!isObject(value) || typeof value.type !== "string") return false;
   switch (value.type) {
-    case "settings:get": case "key:forget": case "ui:get": case "history:clear-all": return true;
-    case "key:set": return isNonEmptyString(value.apiKey);
-    case "ui:set-width": return typeof value.width === "number" && Number.isFinite(value.width) && value.width >= 320 && value.width <= 960;
-    case "history:load": case "history:clear": return isNonEmptyString(value.conversationId);
-    case "settings:save": return isProviderConfig(value.config) && typeof value.privacyAccepted === "boolean";
+    case "settings:get": case "key:forget": case "provider:test": case "ui:get": case "history:clear-all": return Object.keys(value).length === 1;
+    case "key:set": return hasOnlyKeys(value, ["type", "apiKey"]) && isNonEmptyString(value.apiKey);
+    case "ui:set-width": return hasOnlyKeys(value, ["type", "width"]) && typeof value.width === "number" && Number.isFinite(value.width) && value.width >= 320 && value.width <= 960;
+    case "history:load": case "history:clear": return hasOnlyKeys(value, ["type", "conversationId"]) && isNonEmptyString(value.conversationId);
+    case "settings:save": return hasOnlyKeys(value, ["type", "config", "privacyAccepted"]) && isProviderConfig(value.config) && typeof value.privacyAccepted === "boolean";
     default: return false;
   }
 }
