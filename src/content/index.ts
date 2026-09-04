@@ -64,8 +64,10 @@ async function bootstrapImpl(): Promise<void> {
     generation += 1;
     const conversationId = adapter.getConversationId(); const extraction = adapter.extractConversation();
     if (!conversationId || !extraction.certain || extraction.messages.length === 0) { panel.setError({ message: "The complete visible conversation could not be verified.", retryable: true }); return; }
-    disconnectStream(); const requestId = crypto.randomUUID(); const port = chrome.runtime.connect({ name: "side-chat-stream" }); stream = { port, requestId, conversationId };
-    port.onMessage.addListener((raw: unknown) => {
+    disconnectStream(); const requestId = crypto.randomUUID(); let port: chrome.runtime.Port;
+    try { port = chrome.runtime.connect({ name: "side-chat-stream" }); } catch { panel.setError({ message: "Could not start the side-chat request.", retryable: true }); return; }
+    stream = { port, requestId, conversationId };
+    try { port.onMessage.addListener((raw: unknown) => {
       const candidate = raw as { requestId?: unknown; type?: unknown } | null;
       if (!stream || stream.port !== port || candidate?.requestId !== stream.requestId) return;
       if (!isStreamEvent(raw)) { panel.setError({ message: "The side-chat response was invalid.", retryable: true }); disconnectStream(false); return; }
@@ -76,7 +78,7 @@ async function bootstrapImpl(): Promise<void> {
       else if (event.type === "error") { panel.setError({ message: event.error.message, retryable: event.error.retryable }); disconnectStream(false); }
     });
     port.onDisconnect.addListener(() => { if (stream?.port === port) { stream = null; panel.setError({ message: "The side-chat connection closed unexpectedly.", retryable: true }); } });
-    try { port.postMessage({ type: "start", requestId, payload: { conversationId, mainMessages: extraction.messages, quote: submission.quote, question: submission.question, attachments: [], compressOldContext: submission.compressOldContext } }); }
+    port.postMessage({ type: "start", requestId, payload: { conversationId, mainMessages: extraction.messages, quote: submission.quote, question: submission.question, attachments: [], compressOldContext: submission.compressOldContext } }); }
     catch { panel.setError({ message: "Could not start the side-chat request.", retryable: true }); disconnectStream(false); }
   }
   try { panel.setWidth((await request<UiPreferences>({ type: "ui:get" }, isUi)).panelWidth); } catch { panel.setError({ message: "Could not load panel preferences.", retryable: false }); }
@@ -99,7 +101,7 @@ function isStreamEvent(value: unknown): value is StreamServerMessage {
   if (event.type === "accepted") return typeof (event as { approximateTokens?: unknown }).approximateTokens === "number" && Number.isFinite((event as { approximateTokens: number }).approximateTokens) && Number.isInteger((event as { approximateTokens: number }).approximateTokens) && (event as { approximateTokens: number }).approximateTokens >= 0;
   if (event.type === "delta") return typeof event.text === "string";
   if (event.type === "done") return isSideChatRecord(event.record);
-  if (event.type === "error") return Boolean(event.error && typeof event.error === "object" && isErrorCode((event.error as { code?: unknown }).code) && typeof (event.error as { message?: unknown }).message === "string" && ("retryable" in event.error ? typeof (event.error as { retryable?: unknown }).retryable === "boolean" : true));
+  if (event.type === "error") return Boolean(event.error && typeof event.error === "object" && isErrorCode((event.error as { code?: unknown }).code) && typeof (event.error as { message?: unknown }).message === "string" && typeof (event.error as { retryable?: unknown }).retryable === "boolean");
   return false;
 }
 

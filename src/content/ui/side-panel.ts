@@ -12,7 +12,7 @@ export class SidePanel {
   private quote: QuoteReference | null = null; private draft = ""; private error: PanelError | null = null; private lastSubmission: PanelSend | null = null;
   private busy = false; private accepted = false; private stream = ""; private resizing = false; private openState = false; private notice = ""; private streamFrame: number | null = null;
   constructor(private readonly document: Document, private readonly options: SidePanelOptions) {
-    this.host = document.createElement("aside"); this.host.dataset.sideChatHost = "true"; this.root = this.host.attachShadow({ mode: "open" });
+    this.host = document.createElement("aside"); this.host.dataset.sideChatHost = "true"; this.host.setAttribute("aria-label", "Side chat"); this.root = this.host.attachShadow({ mode: "open" });
     document.documentElement.append(this.host); this.host.style.display = "none"; document.defaultView?.addEventListener("resize", this.viewportResize); this.render();
   }
   setWidth(width: number): void { this.width = this.clamp(width); this.syncWidth(); this.applyMargin(); }
@@ -38,7 +38,7 @@ export class SidePanel {
   private render(): void {
     this.cancelStreamFrame();
     this.root.innerHTML = ""; const style = this.document.createElement("style"); style.textContent = sidePanelStyles; this.root.append(style);
-    const panel = this.document.createElement("section"); panel.className = "panel"; panel.setAttribute("role", "complementary"); panel.setAttribute("aria-label", "Side chat"); panel.style.setProperty("--side-chat-width", `${this.width}px`);
+    const panel = this.document.createElement("section"); panel.className = "panel"; panel.style.setProperty("--side-chat-width", `${this.width}px`);
     const resize = this.document.createElement("div"); resize.className = "resize"; resize.dataset.resizeHandle = "true"; resize.setAttribute("aria-label", "Resize side chat"); resize.setAttribute("role", "separator"); resize.setAttribute("aria-orientation", "vertical"); resize.setAttribute("aria-valuemin", "320"); resize.setAttribute("aria-valuemax", String(this.clamp(960))); resize.setAttribute("aria-valuenow", String(this.width)); resize.tabIndex = 0; resize.addEventListener("pointerdown", this.down); resize.addEventListener("keydown", this.keyResize); panel.append(resize);
     const header = this.document.createElement("header"); const title = this.document.createElement("strong"); title.textContent = "Side chat"; header.append(title);
     header.append(this.button("Clear", "clear", () => { if (this.document.defaultView?.confirm?.("Clear side-chat history?") ?? true) this.options.onClear?.(); })); header.append(this.button("Close", "close", () => this.close())); panel.append(header);
