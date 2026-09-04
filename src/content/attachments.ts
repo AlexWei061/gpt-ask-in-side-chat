@@ -8,6 +8,10 @@ import { isVisible } from "./extractor";
 export const ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024;
 export interface AttachmentDescriptor { name: string; sourceMessageIndex: number; url: string | null; }
 type PdfParser = (file: File) => Promise<string>;
+type PdfPage = { getTextContent: () => Promise<{ items: unknown[] }>; cleanup?: () => void };
+type PdfDocument = { numPages: number; getPage: (pageNumber: number) => Promise<PdfPage>; destroy?: () => Promise<void> | void };
+type PdfTask = { promise: Promise<PdfDocument>; destroy?: () => Promise<void> | void };
+type PdfLoader = (source: { data: ArrayBuffer }) => PdfTask;
 
 const chromeRuntime = globalThis.chrome?.runtime;
 if (chromeRuntime?.getURL) pdfjs.GlobalWorkerOptions.workerSrc = chromeRuntime.getURL("pdf.worker.min.mjs");
@@ -17,11 +21,11 @@ function validName(name: string): boolean { return Boolean(name.trim() && name.t
 function textFile(file: File): boolean { return file.type.startsWith("text/") || ["application/json", "application/csv"].includes(file.type) || /\.(?:txt|md|markdown|json|csv|ts|tsx|js|jsx|py|java|c|cc|cpp|h|hpp|cs|go|rs|rb|php|html?|css|xml|yaml|yml|sql|sh|zsh)$/i.test(file.name); }
 function pdfFile(file: File): boolean { return file.type === "application/pdf" || /\.pdf$/i.test(file.name); }
 
-export async function extractPdf(file: File): Promise<string> {
-  let task: ReturnType<typeof pdfjs.getDocument> | undefined;
-  let document: Awaited<ReturnType<typeof pdfjs.getDocument>["promise"]> | undefined;
+export async function extractPdf(file: File, loader: PdfLoader = (source) => pdfjs.getDocument(source) as unknown as PdfTask): Promise<string> {
+  let task: PdfTask | undefined;
+  let document: PdfDocument | undefined;
   try {
-    task = pdfjs.getDocument({ data: await file.arrayBuffer() });
+    task = loader({ data: await file.arrayBuffer() });
     document = await task.promise;
     const pages: string[] = [];
     for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {

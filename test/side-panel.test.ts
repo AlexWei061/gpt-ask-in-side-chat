@@ -186,6 +186,19 @@ describe("side panel", () => {
     await expect(pendingDestroy).resolves.toBeNull();
   });
 
+  it("returns an exact successful reselection and cancels a replaced resolver", async () => {
+    const panel = new SidePanel(document, { onSend: vi.fn() });
+    const replaced = panel.resolveMissingAttachments(["old.txt"]);
+    const selected = panel.resolveMissingAttachments(["one.txt", "two.txt"]);
+    await expect(replaced).resolves.toBeNull();
+    const dialog = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!.querySelector<HTMLDialogElement>("dialog")!;
+    const files = [new File(["one"], "one.txt"), new File(["two"], "two.txt")];
+    Object.defineProperty(dialog.querySelector<HTMLInputElement>("input[type=file]")!, "files", { configurable: true, value: files });
+    dialog.querySelector<HTMLButtonElement>("[data-action=reselect-files]")!.click();
+    await expect(selected).resolves.toEqual(files);
+    panel.destroy();
+  });
+
   it("settles a pending missing-file resolver when normal state rendering replaces the dialog", async () => {
     const panel = new SidePanel(document, { onSend: vi.fn() });
     const pending = panel.resolveMissingAttachments(["one.txt"]);

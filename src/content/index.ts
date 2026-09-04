@@ -116,11 +116,11 @@ function safeAttachmentUrl(value: string, origin: string): URL | null {
   } catch { return null; }
 }
 
-async function fetchAttachment(descriptor: AttachmentDescriptor, origin: string): Promise<File | null> {
+export async function fetchAttachment(descriptor: AttachmentDescriptor, origin: string, fetcher: typeof fetch = fetch): Promise<File | null> {
   if (!descriptor.url) return null;
   const url = safeAttachmentUrl(descriptor.url, origin); if (!url) return null;
   const sameOrigin = url.origin === origin;
-  const response = await fetch(url, { credentials: sameOrigin ? "same-origin" : "omit" });
+  const response = await fetcher(url, { credentials: sameOrigin ? "same-origin" : "omit" });
   if (!response.ok) return null;
   const declaredSize = Number(response.headers.get("content-length"));
   if (Number.isFinite(declaredSize) && declaredSize > 20 * 1024 * 1024) return null;

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ATTACHMENT_MAX_BYTES, extractAttachmentDescriptors, prepareFile } from "../src/content/attachments";
+import { ATTACHMENT_MAX_BYTES, extractAttachmentDescriptors, extractPdf, prepareFile } from "../src/content/attachments";
 
 const file = (name: string, content: string, type = "text/plain") => new File([content], name, { type });
 
@@ -12,6 +12,25 @@ describe("attachment preparation", () => {
     const parser = vi.fn().mockResolvedValue("page one\npage two");
     await expect(prepareFile(file("paper.pdf", "bytes", "application/pdf"), 0, false, parser)).resolves.toEqual({ kind: "text", name: "paper.pdf", sourceMessageIndex: 0, text: "page one\npage two" });
     expect(parser).toHaveBeenCalledTimes(1);
+  });
+
+  it("extracts PDF pages in order and cleans up pages, document, and loading task", async () => {
+    const cleanupOne = vi.fn(); const cleanupTwo = vi.fn(); const destroyDocument = vi.fn(); const destroyTask = vi.fn();
+    const loader = vi.fn(() => ({
+      promise: Promise.resolve({
+        numPages: 2,
+        getPage: vi.fn(async (pageNumber: number) => ({
+          getTextContent: async () => ({ items: pageNumber === 1 ? [{ str: "page" }, { str: "one" }] : [{ str: "page two" }] }),
+          cleanup: pageNumber === 1 ? cleanupOne : cleanupTwo,
+        })),
+        destroy: destroyDocument,
+      }),
+      destroy: destroyTask,
+    }));
+
+    await expect(extractPdf(file("paper.pdf", "bytes", "application/pdf"), loader)).resolves.toBe("page one\npage two");
+    expect(cleanupOne).toHaveBeenCalledOnce(); expect(cleanupTwo).toHaveBeenCalledOnce();
+    expect(destroyDocument).toHaveBeenCalledOnce(); expect(destroyTask).toHaveBeenCalledOnce();
   });
 
   it("rejects unsupported, oversized, empty PDF, and reader failures as attachment errors", async () => {

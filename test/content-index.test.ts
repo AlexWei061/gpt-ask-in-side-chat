@@ -59,7 +59,7 @@ describe("content bootstrap", () => {
       }, lastError: null, connect: () => { const port = new FakePort(); ports.push(port); return port; },
     } } });
   });
-  afterEach(() => { window.dispatchEvent(new Event("pagehide")); vi.resetModules(); document.body.innerHTML = ""; document.querySelectorAll("[data-side-chat-host]").forEach((node) => node.remove()); });
+  afterEach(() => { window.dispatchEvent(new Event("pagehide")); vi.unstubAllGlobals(); vi.resetModules(); document.body.innerHTML = ""; document.querySelectorAll("[data-side-chat-host]").forEach((node) => node.remove()); });
 
   it("does not inject UI before privacy acceptance", async () => {
     await import("../src/content/index");
@@ -128,6 +128,48 @@ describe("content bootstrap", () => {
     root.querySelector<HTMLButtonElement>("[data-action=continue-without-files]")!.click();
     await vi.waitFor(() => expect(ports).toHaveLength(1));
     expect((ports[0]!.sent[0] as { payload: { attachments: unknown[] } }).payload.attachments).toEqual([]);
+  });
+
+  it("uses credentials only for same-origin attachment downloads", async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(new Blob(["text"], { type: "text/plain" }), { status: 200 }));
+    const { bootstrapPromise, fetchAttachment } = await import("../src/content/index"); await bootstrapPromise;
+    await fetchAttachment({ name: "same.txt", sourceMessageIndex: 0, url: "https://chatgpt.com/same" }, "https://chatgpt.com", fetcher as typeof fetch);
+    await fetchAttachment({ name: "cross.txt", sourceMessageIndex: 0, url: "https://files.example/cross" }, "https://chatgpt.com", fetcher as typeof fetch);
+    expect(fetcher.mock.calls[0]?.[1]).toEqual({ credentials: "same-origin" });
+    expect(fetcher.mock.calls[1]?.[1]).toEqual({ credentials: "omit" });
+  });
+
+  it("keeps readable attachments and maps reselected files to the missing message indexes", async () => {
+    privacy = true; window.history.pushState({}, "", "/c/reselect");
+    document.body.innerHTML = `<main><article data-message-author-role="assistant"><p id="quote">alpha</p><a download="read.txt" href="https://files.example/read">read.txt</a></article><article data-message-author-role="user"><p>beta</p><div data-testid="attachment" data-filename="missing.txt">missing.txt</div></article></main>`;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(new Blob(["readable"], { type: "text/plain" }), { status: 200 })));
+    const { bootstrapPromise } = await import("../src/content/index"); await bootstrapPromise;
+    const root = openAndSubmit("question");
+    await vi.waitFor(() => expect(root.querySelector("dialog")).toBeTruthy());
+    const input = root.querySelector<HTMLInputElement>("dialog input[type=file]")!;
+    const replacement = new File(["replacement"], "missing.txt", { type: "text/plain" });
+    Object.defineProperty(input, "files", { configurable: true, value: [replacement] });
+    root.querySelector<HTMLButtonElement>("[data-action=reselect-files]")!.click();
+    await vi.waitFor(() => expect(ports).toHaveLength(1));
+    expect((ports[0]!.sent[0] as { payload: { attachments: unknown[] } }).payload.attachments).toEqual([
+      { kind: "text", name: "read.txt", sourceMessageIndex: 0, text: "readable" },
+      { kind: "text", name: "missing.txt", sourceMessageIndex: 1, text: "replacement" },
+    ]);
+  });
+
+  it("does not start a request when navigation wins during attachment preparation", async () => {
+    privacy = true; window.history.pushState({}, "", "/c/attachment-old");
+    document.body.innerHTML = `<main><article data-message-author-role="assistant"><p id="quote">alpha</p><a download="slow.txt" href="https://files.example/slow">slow.txt</a></article></main>`;
+    let resolveFetch!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { resolveFetch = resolve; })));
+    const { bootstrapPromise } = await import("../src/content/index"); await bootstrapPromise;
+    const root = openAndSubmit("question");
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+    window.history.pushState({}, "", "/c/attachment-new"); document.documentElement.append(document.createElement("i"));
+    await Promise.resolve(); await Promise.resolve();
+    resolveFetch(new Response(new Blob(["late"], { type: "text/plain" }), { status: 200 }));
+    await vi.waitFor(() => expect(root.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true));
+    expect(ports).toHaveLength(0);
   });
 
   it("shows a usable retry after an unexpected disconnect from the real request port", async () => {
