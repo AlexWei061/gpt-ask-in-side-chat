@@ -72,6 +72,42 @@ describe("side panel", () => {
     expect(html).toContain('target="_blank"'); expect(html).toContain('rel="noopener noreferrer"'); expect(html).not.toMatch(/video|svg|form|input|button|autofocus/i);
   });
 
+  it("renders inline and display LaTeX with all supported delimiters", () => {
+    const html = renderMarkdown([
+      String.raw`inline \(x^2\) and $y_1$`,
+      String.raw`\[\mathbb E[X\mid\mathcal F]\]`,
+      String.raw`$$\sum_{i=1}^n i$$`,
+    ].join("\n\n"), document);
+    const holder = document.createElement("div");
+    holder.innerHTML = html;
+    expect(holder.querySelectorAll(".katex")).toHaveLength(4);
+    expect(holder.querySelectorAll(".katex-display")).toHaveLength(2);
+    expect(holder.textContent).toContain("E");
+  });
+
+  it("leaves math delimiters in code and incomplete formulas as text", () => {
+    const html = renderMarkdown([
+      "`\\(not math\\)`",
+      "```txt\n\\[still not math\\]\n```",
+      String.raw`unfinished \[x + 1`,
+    ].join("\n\n"), document);
+    const holder = document.createElement("div");
+    holder.innerHTML = html;
+    expect(holder.querySelectorAll(".katex")).toHaveLength(0);
+    expect(holder.textContent).toContain(String.raw`\(not math\)`);
+    expect(holder.textContent).toContain(String.raw`\[still not math\]`);
+    expect(holder.textContent).toContain(String.raw`unfinished \[x + 1`);
+  });
+
+  it("falls back to escaped source for invalid LaTeX without weakening HTML sanitizing", () => {
+    const html = renderMarkdown(String.raw`\[\definitelyUnknown{<img src=x onerror=alert(1)>}\]`, document);
+    const holder = document.createElement("div");
+    holder.innerHTML = html;
+    expect(holder.querySelector(".math-fallback")).toBeTruthy();
+    expect(holder.querySelector("img")).toBeNull();
+    expect(html).not.toMatch(/onerror|<script/i);
+  });
+
   it("keeps draft before acceptance and retries the original payload once", () => {
     const onSend = vi.fn();
     const panel = new SidePanel(document, { onSend });
