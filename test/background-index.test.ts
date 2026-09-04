@@ -27,7 +27,7 @@ const openOptionsPage = vi.fn(async () => {});
 const localGet = vi.fn(async (..._keys: unknown[]): Promise<Record<string, unknown>> => { throw new Error("storage failed"); });
 Object.assign(globalThis, {
   chrome: {
-    runtime: { onInstalled: installed, onMessage: message, onConnect: connect, openOptionsPage },
+    runtime: { onInstalled: installed, onMessage: message, onConnect: connect, openOptionsPage, getPlatformInfo: vi.fn(async () => ({})) },
     action: { onClicked: clicked },
     storage: {
       local: { get: localGet, set: vi.fn(), setAccessLevel: vi.fn() },
@@ -187,5 +187,30 @@ describe("background listeners", () => {
     connect.listener?.(port);
     port.onMessage.listener?.({ type: "start", requestId: "network", payload });
     await vi.waitFor(() => expect(port.posted.at(-1)).toMatchObject({ type: "error", error: { code: "NETWORK_FAILED", retryable: true } }));
+  });
+
+  it("keeps the service worker active while a model request is pending", async () => {
+    vi.useFakeTimers();
+    try {
+      const getPlatformInfo = globalThis.chrome.runtime.getPlatformInfo as ReturnType<typeof vi.fn>;
+      stream.mockImplementationOnce(({ signal }) => new Promise<string>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+      }));
+      localGet.mockResolvedValueOnce({ "provider-config": { baseUrl: "https://api.example.com/v1", model: "model", contextWindowTokens: 4096, supportsImages: false }, "privacy-accepted": true });
+      (globalThis.chrome.storage.session.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ "provider-api-key": { apiKey: "key", providerBaseUrl: "https://api.example.com/v1" } });
+      const port = new FakePort("side-chat-stream");
+      connect.listener?.(port);
+      port.onMessage.listener?.({ type: "start", requestId: "slow", payload: { ...payload, conversationId: "slow-worker" } });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stream).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(25_000);
+      expect(getPlatformInfo).toHaveBeenCalledOnce();
+
+      port.onDisconnect.listener?.();
+      await vi.advanceTimersByTimeAsync(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

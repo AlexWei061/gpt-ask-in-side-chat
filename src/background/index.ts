@@ -26,6 +26,7 @@ const chatService = new ChatService({
 type ActiveRequest = { controller: AbortController; promise: Promise<unknown> };
 const activeRequests = new Map<string, Set<ActiveRequest>>();
 const clearingConversations = new Map<string, number>();
+const KEEP_ALIVE_INTERVAL_MS = 25_000;
 let clearingAll = 0;
 
 void restrictStorageAccess();
@@ -66,12 +67,14 @@ chrome.runtime.onConnect.addListener((port) => {
       if (event.type === "accepted") post(port, { type: "accepted", requestId: message.requestId, approximateTokens: event.approximateTokens });
       else post(port, { type: "delta", requestId: message.requestId, text: event.text });
     });
+    const keepAliveInterval = setInterval(() => { void chrome.runtime.getPlatformInfo(); }, KEEP_ALIVE_INTERVAL_MS);
     const active = { controller, promise: request };
     addActive(message.payload.conversationId, active);
     void request.then(
       (record) => post(port, { type: "done", requestId: message.requestId, record }),
       (error: unknown) => { if (!controller.signal.aborted) post(port, { type: "error", requestId: message.requestId, error: normalizeStreamError(error) }); },
     ).finally(() => {
+      clearInterval(keepAliveInterval);
       controllers.delete(message.requestId);
       removeActive(message.payload.conversationId, active);
     });
