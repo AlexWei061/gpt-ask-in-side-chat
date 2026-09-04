@@ -21,7 +21,10 @@ function request<T>(message: unknown, valid: (value: unknown) => value is T = ((
 const BOOTSTRAP_KEY = "__sideChatBootstrapPromise";
 export function bootstrap(): Promise<void> {
   const state = document as Document & { [BOOTSTRAP_KEY]?: Promise<void> };
-  return state[BOOTSTRAP_KEY] ?? (state[BOOTSTRAP_KEY] = bootstrapImpl());
+  if (state[BOOTSTRAP_KEY]) return state[BOOTSTRAP_KEY];
+  const promise = bootstrapImpl().catch((error) => { delete state[BOOTSTRAP_KEY]; throw error; });
+  state[BOOTSTRAP_KEY] = promise;
+  return promise;
 }
 async function bootstrapImpl(): Promise<void> {
   if (!(await request<PublicSettings>({ type: "settings:get" }, isSettings)).privacyAccepted) { delete (document as Document & { [BOOTSTRAP_KEY]?: Promise<void> })[BOOTSTRAP_KEY]; return; }
@@ -47,7 +50,7 @@ async function bootstrapImpl(): Promise<void> {
     const conversationId = adapter.getConversationId(); panel.setConversation(conversationId, []);
     if (!conversationId) return;
     try {
-      const record = await request<SideChatRecord | null>({ type: "history:load", conversationId }, isHistory);
+      const record = await request<SideChatRecord | null>({ type: "history:load", conversationId }, (value): value is SideChatRecord | null => value === null || (isSideChatRecord(value) && value.conversationId === conversationId));
       if (!disposed && token === generation && adapter.getConversationId() === conversationId) panel.setMessages(record?.messages ?? []);
     } catch { if (!disposed && token === generation) panel.setNotice("Could not load side-chat history."); }
   }
@@ -65,7 +68,7 @@ async function bootstrapImpl(): Promise<void> {
     port.onMessage.addListener((raw: unknown) => {
       const candidate = raw as { requestId?: unknown; type?: unknown } | null;
       if (!stream || stream.port !== port || candidate?.requestId !== stream.requestId) return;
-      if (!isStreamEvent(raw)) { if (typeof candidate.type === "string") { panel.setError({ message: "The side-chat response was invalid.", retryable: true }); disconnectStream(false); } return; }
+      if (!isStreamEvent(raw)) { panel.setError({ message: "The side-chat response was invalid.", retryable: true }); disconnectStream(false); return; }
       const event = raw;
       if (event.type === "accepted") panel.setAccepted();
       else if (event.type === "delta") panel.appendDelta(event.text);
@@ -81,7 +84,7 @@ async function bootstrapImpl(): Promise<void> {
   const checkNavigation = () => { if (document.location.href !== url) { url = document.location.href; void loadConversation(); } };
   const observer = new MutationObserver(checkNavigation); observer.observe(document.documentElement, { childList: true, subtree: true });
   document.defaultView?.addEventListener("popstate", checkNavigation);
-  const pagehide = (event: PageTransitionEvent) => { if (event.persisted) { disconnectStream(); panel.resetRequest(); return; } disposed = true; observer.disconnect(); document.defaultView?.removeEventListener("popstate", checkNavigation); document.defaultView?.removeEventListener("pagehide", pagehide); document.defaultView?.removeEventListener("pageshow", pageshow); disconnectStream(); selection.destroy(); panel.destroy(); delete (document as Document & { [BOOTSTRAP_KEY]?: Promise<void> })[BOOTSTRAP_KEY]; };
+  const pagehide = (event: PageTransitionEvent) => { if (event.persisted) { generation += 1; disconnectStream(); panel.resetRequest(); return; } disposed = true; observer.disconnect(); document.defaultView?.removeEventListener("popstate", checkNavigation); document.defaultView?.removeEventListener("pagehide", pagehide); document.defaultView?.removeEventListener("pageshow", pageshow); disconnectStream(); selection.destroy(); panel.destroy(); delete (document as Document & { [BOOTSTRAP_KEY]?: Promise<void> })[BOOTSTRAP_KEY]; };
   const pageshow = (event: PageTransitionEvent) => { if (event.persisted) void loadConversation(); };
   document.defaultView?.addEventListener("pagehide", pagehide); document.defaultView?.addEventListener("pageshow", pageshow);
   await loadConversation();
@@ -96,7 +99,7 @@ function isStreamEvent(value: unknown): value is StreamServerMessage {
   if (event.type === "accepted") return typeof (event as { approximateTokens?: unknown }).approximateTokens === "number" && Number.isFinite((event as { approximateTokens: number }).approximateTokens) && Number.isInteger((event as { approximateTokens: number }).approximateTokens) && (event as { approximateTokens: number }).approximateTokens >= 0;
   if (event.type === "delta") return typeof event.text === "string";
   if (event.type === "done") return isSideChatRecord(event.record);
-  if (event.type === "error") return Boolean(event.error && typeof event.error === "object" && isErrorCode((event.error as { code?: unknown }).code) && typeof (event.error as { message?: unknown }).message === "string" && typeof (event.error as { retryable?: unknown }).retryable === "boolean");
+  if (event.type === "error") return Boolean(event.error && typeof event.error === "object" && isErrorCode((event.error as { code?: unknown }).code) && typeof (event.error as { message?: unknown }).message === "string" && ("retryable" in event.error ? typeof (event.error as { retryable?: unknown }).retryable === "boolean" : true));
   return false;
 }
 

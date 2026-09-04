@@ -45,6 +45,11 @@ describe("side panel", () => {
     expect(html).not.toMatch(/javascript:|onerror|iframe|video|svg|form|input|button|autofocus/i);
   });
 
+  it("keeps safe links but strips media, SVG, and form controls", () => {
+    const html = renderMarkdown("[safe](https://example.com) <video></video><svg></svg><form><input autofocus><button>x</button></form>", document);
+    expect(html).toContain('target="_blank"'); expect(html).toContain('rel="noopener noreferrer"'); expect(html).not.toMatch(/video|svg|form|input|button|autofocus/i);
+  });
+
   it("keeps draft before acceptance and retries the original payload once", () => {
     const onSend = vi.fn();
     const panel = new SidePanel(document, { onSend });
@@ -61,6 +66,12 @@ describe("side panel", () => {
     panel.destroy();
   });
 
+  it("does not replace an active quote, but clears stale retry when a new quote opens", () => {
+    const quoteB = { ...quote, text: "second" }; const onSend = vi.fn(); const panel = new SidePanel(document, { onSend }); panel.setConversation("c", []); panel.open(quote);
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!; const input = root.querySelector<HTMLTextAreaElement>("textarea")!; input.value = "ask"; input.dispatchEvent(new Event("input")); root.querySelector<HTMLFormElement>("form")!.requestSubmit(); panel.open(quoteB); expect(root.textContent).toContain("selected words");
+    panel.setError({ message: "retry", retryable: true }); panel.open(quoteB); expect(root.textContent).toContain("second"); expect(root.querySelector("[data-action=retry]")).toBeNull(); panel.destroy();
+  });
+
   it("replaces partial streaming output when retry starts", () => {
     const panel = new SidePanel(document, { onSend: vi.fn() });
     panel.setConversation("c", []); panel.open(quote);
@@ -71,6 +82,18 @@ describe("side panel", () => {
     document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!.querySelector<HTMLButtonElement>("[data-action=retry]")!.click();
     expect(document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!.textContent).not.toContain("old partial");
     panel.destroy();
+  });
+
+  it("handles separately synchronous animation-frame deltas", () => {
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => { callback(0); return 1; });
+    const panel = new SidePanel(document, { onSend: vi.fn() }); panel.setConversation("c", []); panel.open(quote); panel.appendDelta("A"); panel.appendDelta("B");
+    expect(document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!.textContent).toContain("AB"); panel.destroy();
+  });
+
+  it("preserves focused textarea across coalesced streaming updates", () => {
+    let frame: FrameRequestCallback | undefined; const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => { frame = callback; return 7; });
+    const panel = new SidePanel(document, { onSend: vi.fn() }); panel.setConversation("c", []); panel.open(quote); const textarea = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!.querySelector<HTMLTextAreaElement>("textarea")!; textarea.focus(); panel.appendDelta("A"); panel.appendDelta("B");
+    expect(raf).toHaveBeenCalledTimes(1); expect(document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!.querySelector("textarea")).toBe(textarea); frame?.(0); expect(document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!.textContent).toContain("AB"); panel.destroy();
   });
 
   it("shows incomplete history and restores the original body margin when closed", () => {
@@ -84,6 +107,11 @@ describe("side panel", () => {
     expect(host.style.display).toBe("none");
     expect(document.body.style.marginRight).toBe("17px");
     panel.destroy();
+  });
+
+  it("restores absent and important inline margins exactly", () => {
+    const panel = new SidePanel(document, { onSend: vi.fn() }); panel.setConversation("c", []); panel.open(quote); expect(document.body.style.getPropertyPriority("margin-right")).toBe("important"); panel.close(); expect(document.body.style.getPropertyValue("margin-right")).toBe("");
+    document.body.style.setProperty("margin-right", "17px", "important"); panel.open(quote); panel.close(); expect(document.body.style.getPropertyValue("margin-right")).toBe("17px"); expect(document.body.style.getPropertyPriority("margin-right")).toBe("important"); panel.destroy();
   });
 
   it("resizes once on pointerup and cleans pointer listeners on destroy", () => {
