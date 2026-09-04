@@ -134,4 +134,10 @@ describe("ChatGptPageAdapter", () => {
     expect(adapter.findMessageElement(paragraph?.firstChild ?? null)).toBe(document.querySelector("article"));
     expect(adapter.findMessageElement(null)).toBeNull();
   });
+
+  it("extracts from one captured ordered message list", () => {
+    document.body.innerHTML = `<main><article data-message-author-role="user">first</article><article data-message-author-role="assistant">second</article></main>`;
+    const adapter = new ChatGptPageAdapter(document); const captured = adapter.getMessageElements();
+    expect(adapter.extractConversation(captured).messages).toMatchObject([{ index: 0, content: "first" }, { index: 1, content: "second" }]);
+  });
 });

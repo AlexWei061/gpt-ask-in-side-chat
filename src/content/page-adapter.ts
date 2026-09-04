@@ -24,8 +24,9 @@ export class ChatGptPageAdapter {
     return element?.closest(MESSAGE_SELECTOR) ?? null;
   }
 
-  extractConversation(): ExtractionResult {
-    const candidates = Array.from(this.document.querySelectorAll<HTMLElement>("main article"));
+  getMessageElements(): HTMLElement[] { return Array.from(this.document.querySelectorAll<HTMLElement>("main article")); }
+
+  extractConversation(candidates = this.getMessageElements()): ExtractionResult {
     const messages: MainMessage[] = [];
     let certain = candidates.length > 0;
 

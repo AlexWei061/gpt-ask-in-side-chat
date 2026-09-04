@@ -161,4 +161,28 @@ describe("side panel", () => {
     expect(root.querySelector<HTMLTextAreaElement>("textarea")!.disabled).toBe(true);
     panel.destroy();
   });
+
+  it("requires an exact reselected file count or explicitly continues without missing files", async () => {
+    const panel = new SidePanel(document, { onSend: vi.fn() });
+    const pending = panel.resolveMissingAttachments(["<img src=x>", "two.txt"]);
+    const dialog = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!.querySelector<HTMLDialogElement>("dialog")!;
+    expect(dialog.textContent).toContain("<img src=x>");
+    const input = dialog.querySelector<HTMLInputElement>("input[type=file]")!;
+    Object.defineProperty(input, "files", { configurable: true, value: [new File(["one"], "one.txt")] });
+    dialog.querySelector<HTMLButtonElement>("[data-action=reselect-files]")!.click();
+    expect(dialog.textContent).toContain("Select exactly 2 files");
+    dialog.querySelector<HTMLButtonElement>("[data-action=continue-without-files]")!.click();
+    await expect(pending).resolves.toBeNull();
+    panel.destroy();
+  });
+
+  it("resolves a pending missing-file dialog on cancel and destroy", async () => {
+    const panel = new SidePanel(document, { onSend: vi.fn() });
+    const pending = panel.resolveMissingAttachments(["one.txt"]);
+    const dialog = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!.querySelector<HTMLDialogElement>("dialog")!;
+    dialog.dispatchEvent(new Event("cancel"));
+    await expect(pending).resolves.toBeNull();
+    const pendingDestroy = panel.resolveMissingAttachments(["two.txt"]); panel.destroy();
+    await expect(pendingDestroy).resolves.toBeNull();
+  });
 });

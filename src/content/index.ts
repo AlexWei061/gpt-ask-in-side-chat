@@ -1,11 +1,12 @@
 import type { RuntimeResponse, StreamServerMessage } from "../shared/protocol";
-import type { SideChatRecord } from "../shared/types";
+import type { ProviderConfig, SideChatRecord } from "../shared/types";
 import type { ExtensionErrorCode } from "../shared/errors";
 import { ChatGptPageAdapter } from "./page-adapter";
+import { extractAttachmentDescriptors, prepareFile, type AttachmentDescriptor } from "./attachments";
 import { SelectionController } from "./selection";
 import { SidePanel, type PanelSend } from "./ui/side-panel";
 
-type PublicSettings = { privacyAccepted: boolean };
+type PublicSettings = { privacyAccepted: boolean; config: ProviderConfig | null };
 type UiPreferences = { panelWidth: number };
 
 function request<T>(message: unknown, valid: (value: unknown) => value is T = ((_: unknown): _ is T => true)): Promise<T> {
@@ -27,7 +28,8 @@ export function bootstrap(): Promise<void> {
   return promise;
 }
 async function bootstrapImpl(): Promise<void> {
-  if (!(await request<PublicSettings>({ type: "settings:get" }, isSettings)).privacyAccepted) { delete (document as Document & { [BOOTSTRAP_KEY]?: Promise<void> })[BOOTSTRAP_KEY]; return; }
+  const publicSettings = await request<PublicSettings>({ type: "settings:get" }, isSettings);
+  if (!publicSettings.privacyAccepted) { delete (document as Document & { [BOOTSTRAP_KEY]?: Promise<void> })[BOOTSTRAP_KEY]; return; }
   const adapter = new ChatGptPageAdapter(document);
   let stream: { port: chrome.runtime.Port; requestId: string; conversationId: string } | null = null;
   let generation = 0;
@@ -40,7 +42,7 @@ async function bootstrapImpl(): Promise<void> {
     try { active.port.disconnect(); } catch { /* disconnected */ }
   };
   const panel = new SidePanel(document, {
-    onSend: (submission) => start(submission),
+    onSend: (submission) => { void start(submission); },
     onResize: (width) => { void request({ type: "ui:set-width", width }).catch(() => panel.setNotice("Could not save panel width.")); },
     onClear: () => clear(),
   });
@@ -60,10 +62,21 @@ async function bootstrapImpl(): Promise<void> {
     try { await request({ type: "history:clear", conversationId: id }); if (!disposed && token === generation && adapter.getConversationId() === id) panel.setMessages([]); }
     catch { if (!disposed && token === generation && adapter.getConversationId() === id) panel.setNotice("Could not clear side-chat history."); }
   }
-  function start(submission: PanelSend): void {
-    generation += 1;
-    const conversationId = adapter.getConversationId(); const extraction = adapter.extractConversation();
+  async function start(submission: PanelSend): Promise<void> {
+    const token = ++generation;
+    const conversationId = adapter.getConversationId(); const elements = adapter.getMessageElements(); const extraction = adapter.extractConversation(elements);
     if (!conversationId || !extraction.certain || extraction.messages.length === 0) { panel.setError({ message: "The complete visible conversation could not be verified.", retryable: true }); return; }
+    const descriptors = extractAttachmentDescriptors(elements);
+    let attachments: import("../shared/types").PreparedAttachment[] = [];
+    if (descriptors.length > 0) {
+      try {
+        attachments = await resolveAttachments(descriptors, publicSettings.config?.supportsImages === true, panel);
+      } catch (error) {
+        if (!disposed && token === generation) panel.setError({ message: error instanceof Error ? error.message : "An attachment could not be prepared.", retryable: true });
+        return;
+      }
+    }
+    if (disposed || token !== generation || adapter.getConversationId() !== conversationId) { panel.resetRequest(); return; }
     disconnectStream(); const requestId = crypto.randomUUID(); let port: chrome.runtime.Port;
     try { port = chrome.runtime.connect({ name: "side-chat-stream" }); } catch { panel.setError({ message: "Could not start the side-chat request.", retryable: true }); return; }
     stream = { port, requestId, conversationId };
@@ -78,7 +91,7 @@ async function bootstrapImpl(): Promise<void> {
       else if (event.type === "error") { panel.setError({ message: event.error.message, retryable: event.error.retryable }); disconnectStream(false); }
     });
     port.onDisconnect.addListener(() => { if (stream?.port === port) { stream = null; panel.setError({ message: "The side-chat connection closed unexpectedly.", retryable: true }); } });
-    port.postMessage({ type: "start", requestId, payload: { conversationId, mainMessages: extraction.messages, quote: submission.quote, question: submission.question, attachments: [], compressOldContext: submission.compressOldContext } }); }
+    port.postMessage({ type: "start", requestId, payload: { conversationId, mainMessages: extraction.messages, quote: submission.quote, question: submission.question, attachments, compressOldContext: submission.compressOldContext } }); }
     catch { panel.setError({ message: "Could not start the side-chat request.", retryable: true }); disconnectStream(false); }
   }
   try { panel.setWidth((await request<UiPreferences>({ type: "ui:get" }, isUi)).panelWidth); } catch { panel.setError({ message: "Could not load panel preferences.", retryable: false }); }
@@ -93,6 +106,45 @@ async function bootstrapImpl(): Promise<void> {
 }
 
 export const bootstrapPromise = bootstrap().catch(() => { console.warn("Side chat could not start."); });
+
+function safeAttachmentUrl(value: string, origin: string): URL | null {
+  try {
+    const url = new URL(value, origin);
+    if (url.protocol === "blob:") return url;
+    if (url.protocol !== "https:") return null;
+    return url;
+  } catch { return null; }
+}
+
+async function fetchAttachment(descriptor: AttachmentDescriptor, origin: string): Promise<File | null> {
+  if (!descriptor.url) return null;
+  const url = safeAttachmentUrl(descriptor.url, origin); if (!url) return null;
+  const sameOrigin = url.origin === origin;
+  const response = await fetch(url, { credentials: sameOrigin ? "same-origin" : "omit" });
+  if (!response.ok) return null;
+  const declaredSize = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declaredSize) && declaredSize > 20 * 1024 * 1024) return null;
+  const blob = await response.blob();
+  if (blob.size > 20 * 1024 * 1024) return null;
+  return new File([blob], descriptor.name, { type: blob.type });
+}
+
+async function resolveAttachments(descriptors: AttachmentDescriptor[], supportsImages: boolean, panel: SidePanel) {
+  const prepared = [] as import("../shared/types").PreparedAttachment[];
+  const missing: AttachmentDescriptor[] = [];
+  for (const descriptor of descriptors) {
+    let file: File | null;
+    try { file = await fetchAttachment(descriptor, document.location.origin); } catch { file = null; }
+    if (!file) { missing.push(descriptor); continue; }
+    prepared.push(await prepareFile(file, descriptor.sourceMessageIndex, supportsImages));
+  }
+  if (missing.length === 0) return prepared;
+  const replacements = await panel.resolveMissingAttachments(missing.map((descriptor) => descriptor.name));
+  if (replacements === null) return prepared;
+  if (replacements.length !== missing.length) throw new Error("The missing attachment selection was incomplete.");
+  for (const [index, file] of replacements.entries()) prepared.push(await prepareFile(file, missing[index]!.sourceMessageIndex, supportsImages));
+  return prepared;
+}
 
 function isStreamEvent(value: unknown): value is StreamServerMessage {
   if (!value || typeof value !== "object") return false;
@@ -113,7 +165,10 @@ function isRuntimeError(value: unknown): value is { code: ExtensionErrorCode; me
     && typeof (value as { message?: unknown }).message === "string"
     && (!("retryable" in value) || typeof (value as { retryable?: unknown }).retryable === "boolean"));
 }
-function isSettings(value: unknown): value is PublicSettings { return Boolean(value && typeof value === "object" && typeof (value as PublicSettings).privacyAccepted === "boolean"); }
+function isSettings(value: unknown): value is PublicSettings {
+  const config = (value as Partial<PublicSettings> | null)?.config;
+  return Boolean(value && typeof value === "object" && typeof (value as PublicSettings).privacyAccepted === "boolean" && (config === undefined || config === null || Boolean(config && typeof config === "object" && typeof config.supportsImages === "boolean" && typeof config.baseUrl === "string" && typeof config.model === "string" && typeof config.contextWindowTokens === "number")));
+}
 function isUi(value: unknown): value is UiPreferences { return Boolean(value && typeof value === "object" && typeof (value as UiPreferences).panelWidth === "number" && Number.isFinite((value as UiPreferences).panelWidth)); }
 function isQuote(value: unknown): boolean { return Boolean(value && typeof value === "object" && typeof (value as { text?: unknown }).text === "string" && ((value as { sourceRole?: unknown }).sourceRole === "user" || (value as { sourceRole?: unknown }).sourceRole === "assistant") && Number.isInteger((value as { sourceMessageIndex?: unknown }).sourceMessageIndex) && (value as { sourceMessageIndex: number }).sourceMessageIndex >= 0); }
 function isSideChatRecord(value: unknown): value is SideChatRecord {

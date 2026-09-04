@@ -11,6 +11,7 @@ export class SidePanel {
   private originalMargin: { value: string; priority: string } | null = null; private conversationId: string | null = null; private messages: SideMessage[] = [];
   private quote: QuoteReference | null = null; private draft = ""; private error: PanelError | null = null; private lastSubmission: PanelSend | null = null;
   private busy = false; private accepted = false; private stream = ""; private resizing = false; private openState = false; private notice = ""; private streamFrame: number | null = null;
+  private missingResolver: ((files: File[] | null) => void) | null = null; private missingDialog: HTMLDialogElement | null = null;
   constructor(private readonly document: Document, private readonly options: SidePanelOptions) {
     this.host = document.createElement("aside"); this.host.dataset.sideChatHost = "true"; this.host.setAttribute("aria-label", "Side chat"); this.root = this.host.attachShadow({ mode: "open" });
     document.documentElement.append(this.host); this.host.style.display = "none"; document.defaultView?.addEventListener("resize", this.viewportResize); this.render();
@@ -27,7 +28,25 @@ export class SidePanel {
   setBusy(busy: boolean): void { this.busy = busy; this.render(); }
   appendDelta(delta: string): void { this.stream += delta; if (this.streamFrame !== null) return; const view = this.document.defaultView; if (!view) { this.updateStream(); return; } let fired = false; let frame: number | null = null; frame = view.requestAnimationFrame(() => { fired = true; if (this.streamFrame === frame) this.streamFrame = null; this.updateStream(); }); this.streamFrame = fired ? null : frame; }
   complete(messages: SideMessage[]): void { this.messages = messages; this.stream = ""; this.busy = false; this.accepted = false; this.error = null; this.lastSubmission = null; this.render(); }
-  destroy(): void { this.cancelStreamFrame(); this.document.removeEventListener("pointermove", this.move); this.document.removeEventListener("pointerup", this.up); this.document.removeEventListener("pointercancel", this.up); this.document.defaultView?.removeEventListener("blur", this.up); this.document.defaultView?.removeEventListener("resize", this.viewportResize); this.restoreMargin(); this.host.remove(); }
+  destroy(): void { this.closeMissingResolver(null); this.cancelStreamFrame(); this.document.removeEventListener("pointermove", this.move); this.document.removeEventListener("pointerup", this.up); this.document.removeEventListener("pointercancel", this.up); this.document.defaultView?.removeEventListener("blur", this.up); this.document.defaultView?.removeEventListener("resize", this.viewportResize); this.restoreMargin(); this.host.remove(); }
+  resolveMissingAttachments(names: string[]): Promise<File[] | null> {
+    this.closeMissingResolver(null);
+    return new Promise((resolve) => {
+      this.missingResolver = resolve;
+      const dialog = this.document.createElement("dialog"); dialog.setAttribute("aria-label", "Reselect missing attachments"); dialog.dataset.missingAttachments = "true";
+      const title = this.document.createElement("h2"); title.textContent = "Reselect missing attachments";
+      const explanation = this.document.createElement("p"); explanation.textContent = "All missing files must be reselected, or you may continue without them.";
+      const list = this.document.createElement("ul"); for (const name of names) { const item = this.document.createElement("li"); item.textContent = name; list.append(item); }
+      const input = this.document.createElement("input"); input.type = "file"; input.multiple = names.length > 1; input.setAttribute("aria-label", "Missing attachment files");
+      const error = this.document.createElement("p"); error.setAttribute("role", "alert");
+      const reselect = this.button("Reselect files", "reselect-files", () => { const files = Array.from(input.files ?? []); if (files.length !== names.length) { error.textContent = `Select exactly ${names.length} files.`; return; } this.closeMissingResolver(files); });
+      const skip = this.button("Continue without these files", "continue-without-files", () => this.closeMissingResolver(null));
+      dialog.addEventListener("cancel", (event) => { event.preventDefault(); this.closeMissingResolver(null); });
+      dialog.append(title, explanation, list, input, error, reselect, skip); this.root.append(dialog); this.missingDialog = dialog;
+      try { dialog.showModal(); } catch { dialog.setAttribute("open", ""); }
+    });
+  }
+  private closeMissingResolver(files: File[] | null): void { const resolve = this.missingResolver; this.missingResolver = null; const dialog = this.missingDialog; this.missingDialog = null; try { dialog?.close(); } catch { /* absent dialog support */ } dialog?.remove(); resolve?.(files); }
   private syncOpenState(): void { this.host.style.display = this.openState ? "" : "none"; if (this.openState) this.applyMargin(); }
   private applyMargin(): void { if (this.openState) this.document.body.style.setProperty("margin-right", `${this.width}px`, "important"); }
   private restoreMargin(): void { if (this.originalMargin !== null) { if (this.originalMargin.value) this.document.body.style.setProperty("margin-right", this.originalMargin.value, this.originalMargin.priority); else this.document.body.style.removeProperty("margin-right"); this.originalMargin = null; } }
