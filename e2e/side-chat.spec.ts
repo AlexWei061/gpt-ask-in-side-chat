@@ -23,7 +23,10 @@ test("selection opens a docked side chat whose history survives reload", async (
       providerRequest = route.request().postDataJSON();
       await route.fulfill({
         contentType: "text/event-stream",
-        body: 'data: {"choices":[{"delta":{"content":"Side answer"}}]}\n\ndata: [DONE]\n\n',
+        body: 'data: {"choices":[{"delta":{"content":null,"reasoning_content":"private reasoning"}}]}\n\n' +
+          'data: {"choices":[{"delta":{"content":"Side answer","reasoning_content":null}}]}\n\n' +
+          'data: {"choices":[{"delta":{"content":null},"finish_reason":"stop"}]}\n\n' +
+          "data: [DONE]\n\n",
       });
     });
 

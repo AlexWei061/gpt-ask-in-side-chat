@@ -108,7 +108,7 @@ function processFrame(frame: string, onDelta: (content: string) => void): { cont
   if (!delta || typeof delta !== "object" || Array.isArray(delta)) throw protocolError();
 
   const content = (delta as { content?: unknown }).content;
-  if (content === undefined) return { content: "", done: false };
+  if (content === undefined || content === null) return { content: "", done: false };
   if (typeof content !== "string") throw protocolError();
 
   onDelta(content);

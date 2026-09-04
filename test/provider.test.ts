@@ -43,6 +43,18 @@ describe("streamChatCompletion", () => {
     }));
   });
 
+  it("ignores nullable DeepSeek thinking deltas and streams only the visible answer", async () => {
+    const onDelta = vi.fn();
+    const body = 'data: {"choices":[{"delta":{"content":null,"reasoning_content":"private reasoning"}}]}\n\n' +
+      'data: {"choices":[{"delta":{"content":"OK","reasoning_content":null}}]}\n\n' +
+      'data: {"choices":[{"delta":{"content":null},"finish_reason":"stop"}]}\n\n' +
+      "data: [DONE]\n\n";
+    await expect(streamChatCompletion(args({ fetcher: vi.fn(async () => sseResponse(body)), onDelta }))).resolves.toBe("OK");
+    expect(onDelta).toHaveBeenCalledOnce();
+    expect(onDelta).toHaveBeenCalledWith("OK");
+    expect(JSON.stringify(onDelta.mock.calls)).not.toContain("private reasoning");
+  });
+
   it("maps a rate limit response without exposing its body", async () => {
     const error = await streamChatCompletion(args({
       fetcher: vi.fn(async () => sseResponse("provider-private-detail", 429)),
