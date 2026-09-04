@@ -10,10 +10,46 @@ class FakePort {
   emit(value: unknown) { this.messages.forEach((listener) => listener(value)); }
 }
 
+function sideRecord(conversationId: string, content: string) {
+  return {
+    schemaVersion: 1 as const,
+    conversationId,
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    messages: [{ id: `${conversationId}-message`, role: "assistant" as const, content, status: "complete" as const, createdAt: "2026-01-01T00:00:00.000Z" }],
+  };
+}
+
+function transition(type: "pagehide" | "pageshow", persisted: boolean): PageTransitionEvent {
+  const event = new Event(type);
+  Object.defineProperty(event, "persisted", { value: persisted });
+  return event as PageTransitionEvent;
+}
+
+function installSelectableMessage(): void {
+  document.body.innerHTML = `<main><article data-message-author-role="assistant"><p id="quote">alpha</p></article></main>`;
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => { callback(0); return 1; });
+}
+
+function openAndSubmit(question: string): ShadowRoot {
+  const selection = document.getSelection();
+  selection?.removeAllRanges();
+  const range = document.createRange();
+  range.selectNodeContents(document.querySelector("#quote")!);
+  selection?.addRange(range);
+  document.dispatchEvent(new Event("selectionchange"));
+  document.querySelector<HTMLButtonElement>("[data-side-chat-selection-action]")!.click();
+  const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+  const input = root.querySelector<HTMLTextAreaElement>("textarea")!;
+  input.value = question;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  root.querySelector<HTMLFormElement>("form")!.requestSubmit();
+  return root;
+}
+
 describe("content bootstrap", () => {
   let ports: FakePort[]; let historyRecords = new Map<string, unknown>(); let privacy = false;
   beforeEach(() => {
-    ports = []; historyRecords = new Map(); privacy = false; document.body.innerHTML = ""; document.querySelectorAll("[data-side-chat-host]").forEach((node) => node.remove());
+    ports = []; historyRecords = new Map(); privacy = false; window.history.replaceState({}, "", "/"); document.body.innerHTML = ""; document.querySelectorAll("[data-side-chat-host]").forEach((node) => node.remove());
     Object.defineProperty(globalThis, "chrome", { configurable: true, value: { runtime: {
       sendMessage: (message: { type: string; conversationId?: string }, callback: (response: unknown) => void) => {
         if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: privacy } });
@@ -117,5 +153,133 @@ describe("content bootstrap", () => {
     oldCallback?.({ ok: true, value: { schemaVersion: 1, conversationId: "old", updatedAt: "", messages: [{ id: "stale", role: "assistant", content: "STALE", status: "complete", createdAt: "" }] } }); await boot;
     expect(document.querySelector("[data-side-chat-host]")?.shadowRoot?.textContent).not.toContain("STALE");
     expect(document.querySelector("[data-side-chat-host]")?.shadowRoot?.textContent).toContain("NEW");
+  });
+
+  it("does not let a delayed same-conversation history load overwrite an active stream", async () => {
+    privacy = true;
+    window.history.pushState({}, "", "/c/delayed-send");
+    installSelectableMessage();
+    let loadCallback: ((response: unknown) => void) | undefined;
+    (chrome.runtime.sendMessage as unknown as (message: { type: string }, callback: (response: unknown) => void) => void) = (message, callback) => {
+      if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: true } });
+      else if (message.type === "ui:get") callback({ ok: true, value: { panelWidth: 420 } });
+      else if (message.type === "history:load") loadCallback = callback;
+      else callback({ ok: true });
+    };
+    const { bootstrapPromise } = await import("../src/content/index");
+    await vi.waitFor(() => expect(loadCallback).toBeTypeOf("function"));
+    const root = openAndSubmit("question");
+    const port = ports.at(-1)!;
+    const start = port.sent.at(-1) as { requestId: string };
+    port.emit({ type: "accepted", requestId: start.requestId, approximateTokens: 1 });
+    port.emit({ type: "delta", requestId: start.requestId, text: "LIVE PARTIAL" });
+    loadCallback?.({ ok: true, value: sideRecord("delayed-send", "OLD HISTORY") });
+    await bootstrapPromise;
+    expect(root.textContent).toContain("LIVE PARTIAL");
+    expect(root.textContent).not.toContain("OLD HISTORY");
+  });
+
+  it("does not let a delayed history load resurrect a cleared conversation", async () => {
+    privacy = true;
+    window.history.pushState({}, "", "/c/delayed-clear");
+    installSelectableMessage();
+    Object.defineProperty(window, "confirm", { configurable: true, value: () => true });
+    let loadCallback: ((response: unknown) => void) | undefined;
+    (chrome.runtime.sendMessage as unknown as (message: { type: string }, callback: (response: unknown) => void) => void) = (message, callback) => {
+      if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: true } });
+      else if (message.type === "ui:get") callback({ ok: true, value: { panelWidth: 420 } });
+      else if (message.type === "history:load") loadCallback = callback;
+      else callback({ ok: true });
+    };
+    const { bootstrapPromise } = await import("../src/content/index");
+    await vi.waitFor(() => expect(loadCallback).toBeTypeOf("function"));
+    const selection = document.getSelection();
+    selection?.removeAllRanges();
+    const range = document.createRange();
+    range.selectNodeContents(document.querySelector("#quote")!);
+    selection?.addRange(range);
+    document.dispatchEvent(new Event("selectionchange"));
+    document.querySelector<HTMLButtonElement>("[data-side-chat-selection-action]")!.click();
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    root.querySelector<HTMLButtonElement>("[data-action=clear]")!.click();
+    await Promise.resolve();
+    loadCallback?.({ ok: true, value: sideRecord("delayed-clear", "RESURRECTED") });
+    await bootstrapPromise;
+    expect(root.textContent).not.toContain("RESURRECTED");
+  });
+
+  it("terminates malformed current events but ignores malformed events from an old port", async () => {
+    privacy = true;
+    window.history.pushState({}, "", "/c/protocol");
+    installSelectableMessage();
+    const { bootstrapPromise } = await import("../src/content/index");
+    await bootstrapPromise;
+    const root = openAndSubmit("retry protocol");
+    const first = ports.at(-1)!;
+    const firstStart = first.sent.at(-1) as { requestId: string };
+    first.emit({ type: "error", requestId: firstStart.requestId, error: { code: "NETWORK_FAILED", message: "missing retryable" } });
+    expect(root.textContent).toContain("response was invalid");
+    expect(root.querySelector("[data-action=retry]")).toBeTruthy();
+    expect(first.disconnectCount).toBe(1);
+
+    root.querySelector<HTMLButtonElement>("[data-action=retry]")!.click();
+    const second = ports.at(-1)!;
+    const secondStart = second.sent.at(-1) as { requestId: string };
+    first.emit({ type: 123, requestId: secondStart.requestId });
+    expect(second.disconnectCount).toBe(0);
+    second.emit({ type: "done", requestId: secondStart.requestId, record: sideRecord("other-conversation", "WRONG") });
+    expect(root.textContent).toContain("response was invalid");
+    expect(root.textContent).not.toContain("WRONG");
+    expect(second.disconnectCount).toBe(1);
+  });
+
+  it("recovers when the first runtime port connection throws synchronously", async () => {
+    privacy = true;
+    window.history.pushState({}, "", "/c/connect");
+    installSelectableMessage();
+    const connect = vi.fn()
+      .mockImplementationOnce(() => { throw new Error("extension reloaded"); })
+      .mockImplementation(() => { const port = new FakePort(); ports.push(port); return port; });
+    chrome.runtime.connect = connect as typeof chrome.runtime.connect;
+    const { bootstrapPromise } = await import("../src/content/index");
+    await bootstrapPromise;
+    const root = openAndSubmit("connect again");
+    expect(root.textContent).toContain("Could not start");
+    expect(root.querySelector("[data-action=retry]")).toBeTruthy();
+    root.querySelector<HTMLButtonElement>("[data-action=retry]")!.click();
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(ports).toHaveLength(1);
+  });
+
+  it("keeps one singleton and restores it across BFCache and permanent lifecycle events", async () => {
+    privacy = true;
+    window.history.pushState({}, "", "/c/cache");
+    installSelectableMessage();
+    const module = await import("../src/content/index");
+    await module.bootstrapPromise;
+    const first = module.bootstrap();
+    const second = module.bootstrap();
+    expect(first).toBe(second);
+    await Promise.all([first, second]);
+    expect(document.querySelectorAll("[data-side-chat-host]")).toHaveLength(1);
+    expect(document.querySelectorAll("[data-side-chat-selection-action]")).toHaveLength(1);
+
+    const root = openAndSubmit("cache question");
+    const port = ports.at(-1)!;
+    const start = port.sent.at(-1) as { requestId: string };
+    port.emit({ type: "accepted", requestId: start.requestId, approximateTokens: 1 });
+    port.emit({ type: "delta", requestId: start.requestId, text: "TRANSIENT" });
+    window.dispatchEvent(transition("pagehide", true));
+    expect(port.sent).toContainEqual({ type: "abort", requestId: start.requestId });
+    expect(document.querySelectorAll("[data-side-chat-host]")).toHaveLength(1);
+    expect(root.textContent).not.toContain("TRANSIENT");
+
+    historyRecords.set("cache", sideRecord("cache", "RESTORED"));
+    window.dispatchEvent(transition("pageshow", true));
+    await vi.waitFor(() => expect(root.textContent).toContain("RESTORED"));
+    window.dispatchEvent(transition("pagehide", false));
+    expect(document.querySelector("[data-side-chat-host]")).toBeNull();
+    await module.bootstrap();
+    expect(document.querySelectorAll("[data-side-chat-host]")).toHaveLength(1);
   });
 });

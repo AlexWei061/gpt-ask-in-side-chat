@@ -13,7 +13,7 @@ function request<T>(message: unknown, valid: (value: unknown) => value is T = ((
     const generic = () => reject(new Error("The extension could not contact its background service."));
     if (chrome.runtime.lastError || !response || typeof response !== "object" || typeof (response as { ok?: unknown }).ok !== "boolean") return generic();
     const result = response as RuntimeResponse<T>;
-    if (!result.ok) return isErrorCode(result.error?.code) && typeof result.error?.message === "string" ? reject(new Error(result.error.message)) : generic();
+    if (!result.ok) return isRuntimeError(result.error) ? reject(new Error(result.error.message)) : generic();
     return valid(result.value) ? resolve(result.value) : generic();
   }));
 }
@@ -106,9 +106,15 @@ function isStreamEvent(value: unknown): value is StreamServerMessage {
 }
 
 function isErrorCode(value: unknown): value is ExtensionErrorCode { return typeof value === "string" && ["EXTRACTION_UNCERTAIN", "KEY_REQUIRED", "PERMISSION_REQUIRED", "AUTHENTICATION_FAILED", "RATE_LIMITED", "CONTEXT_OVERFLOW", "ATTACHMENT_FAILED", "NETWORK_FAILED", "PROTOCOL_FAILED", "STORAGE_FAILED"].includes(value); }
+function isRuntimeError(value: unknown): value is { code: ExtensionErrorCode; message: string; retryable?: boolean } {
+  return Boolean(value
+    && typeof value === "object"
+    && isErrorCode((value as { code?: unknown }).code)
+    && typeof (value as { message?: unknown }).message === "string"
+    && (!("retryable" in value) || typeof (value as { retryable?: unknown }).retryable === "boolean"));
+}
 function isSettings(value: unknown): value is PublicSettings { return Boolean(value && typeof value === "object" && typeof (value as PublicSettings).privacyAccepted === "boolean"); }
 function isUi(value: unknown): value is UiPreferences { return Boolean(value && typeof value === "object" && typeof (value as UiPreferences).panelWidth === "number" && Number.isFinite((value as UiPreferences).panelWidth)); }
-function isHistory(value: unknown): value is SideChatRecord | null { return value === null || isSideChatRecord(value); }
 function isQuote(value: unknown): boolean { return Boolean(value && typeof value === "object" && typeof (value as { text?: unknown }).text === "string" && ((value as { sourceRole?: unknown }).sourceRole === "user" || (value as { sourceRole?: unknown }).sourceRole === "assistant") && Number.isInteger((value as { sourceMessageIndex?: unknown }).sourceMessageIndex) && (value as { sourceMessageIndex: number }).sourceMessageIndex >= 0); }
 function isSideChatRecord(value: unknown): value is SideChatRecord {
   if (!value || typeof value !== "object") return false; const record = value as SideChatRecord;
