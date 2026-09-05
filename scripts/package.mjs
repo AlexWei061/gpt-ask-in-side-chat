@@ -1,10 +1,16 @@
 import { ZipArchive } from "archiver";
 import { createWriteStream } from "node:fs";
 import { mkdir, readFile, readdir } from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 
+const require = createRequire(import.meta.url);
+const katexDirectory = path.dirname(require.resolve("katex/dist/katex.min.css"));
+const katexFonts = (await readdir(path.join(katexDirectory, "fonts")))
+  .filter((file) => file.endsWith(".woff2"));
 const expectedFiles = [
   "background.js", "content.js", "icons/icon-16.png", "icons/icon-32.png", "icons/icon-48.png", "icons/icon-128.png",
+  "katex/katex.min.css", ...katexFonts.map((font) => `katex/fonts/${font}`),
   "manifest.json", "options.html", "options.js", "pdf.worker.min.mjs",
 ].sort();
 

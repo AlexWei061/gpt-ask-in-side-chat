@@ -29,6 +29,14 @@ describe("side panel", () => {
     panel.destroy();
   });
 
+  it("loads the packaged KaTeX stylesheet inside the shadow root", () => {
+    const panel = new SidePanel(document, { onSend: vi.fn() });
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    expect(root.querySelector<HTMLLinkElement>('link[data-katex-style]')?.href)
+      .toContain("katex/katex.min.css");
+    panel.destroy();
+  });
+
   it("shows the captured boundary, destination, model, limit, and accepted token estimate", () => {
     const panel = new SidePanel(document, { onSend: vi.fn() });
     panel.setConversation("conversation", []);

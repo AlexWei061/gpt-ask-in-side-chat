@@ -61,7 +61,9 @@ export class SidePanel {
   private render(): void {
     this.closeMissingResolver(undefined);
     this.cancelStreamFrame();
-    this.root.innerHTML = ""; const style = this.document.createElement("style"); style.textContent = sidePanelStyles; this.root.append(style);
+    this.root.innerHTML = ""; const style = this.document.createElement("style"); style.textContent = sidePanelStyles;
+    const katexStyle = this.document.createElement("link"); katexStyle.rel = "stylesheet"; katexStyle.dataset.katexStyle = "true"; katexStyle.href = typeof chrome !== "undefined" && chrome.runtime?.getURL ? chrome.runtime.getURL("katex/katex.min.css") : "katex/katex.min.css";
+    this.root.append(style, katexStyle);
     const panel = this.document.createElement("section"); panel.className = "panel"; panel.style.setProperty("--side-chat-width", `${this.width}px`);
     const resize = this.document.createElement("div"); resize.className = "resize"; resize.dataset.resizeHandle = "true"; resize.setAttribute("aria-label", "Resize side chat"); resize.setAttribute("role", "separator"); resize.setAttribute("aria-orientation", "vertical"); resize.setAttribute("aria-valuemin", "320"); resize.setAttribute("aria-valuemax", String(this.clamp(960))); resize.setAttribute("aria-valuenow", String(this.width)); resize.tabIndex = 0; resize.addEventListener("pointerdown", this.down); resize.addEventListener("keydown", this.keyResize); panel.append(resize);
     const header = this.document.createElement("header"); const title = this.document.createElement("strong"); title.textContent = "Side chat"; header.append(title);

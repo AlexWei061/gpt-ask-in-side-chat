@@ -35,4 +35,14 @@ describe("release manifest", () => {
 
     expect(present).toEqual(files);
   });
+
+  it("packages local KaTeX styling and exposes it only on ChatGPT", async () => {
+    const manifest = JSON.parse(await readFile("dist/manifest.json", "utf8"));
+    await expect(readFile("dist/katex/katex.min.css", "utf8")).resolves.toContain("KaTeX");
+    await expect(readFile("dist/katex/fonts/KaTeX_Main-Regular.woff2")).resolves.toBeTruthy();
+    expect(manifest.web_accessible_resources).toContainEqual({
+      resources: ["pdf.worker.min.mjs", "katex/katex.min.css", "katex/fonts/*.woff2"],
+      matches: ["https://chatgpt.com/*"],
+    });
+  });
 });
