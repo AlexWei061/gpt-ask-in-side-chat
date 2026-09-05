@@ -4,3 +4,14 @@ node_modules/
 release/
 test-results/
 playwright-report/
+
+# macOS metadata
+.DS_Store
+
+# Local environment settings
+.env
+.env.*
+!.env.example
+
+# npm debug logs
+npm-debug.log*

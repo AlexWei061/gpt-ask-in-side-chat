@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="为会 C++、Python 与竞赛算法的数学系学生编写：从真实源码理解侧边对话助手，练习定位、修复和验证 bug。">
+  <meta name="color-scheme" content="light">
+  <title>读懂你的项目 · 侧边对话助手</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='10' fill='%23172339'/%3E%3Ctext x='5' y='28' font-size='25' fill='%23aeea80' font-family='monospace'%3E%7B%7D%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="source-data.js"></script>
+  <script defer src="curriculum.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <a class="skip" href="#lesson">跳到课程正文</a>
+  <aside class="sidebar" aria-label="学习导航">
+    <a class="brand" href="#start"><span class="brand-icon" aria-hidden="true">{ }</span><span>读懂你的项目<small>侧边对话助手 · 学习手册</small></span></a>
+    <div class="sidebar-intro"><span class="eyebrow">FROM ALGORITHMS TO APPS</span><p>把你熟悉的算法思维，<br>接到真实的软件工程上。</p></div>
+    <label class="search-label" for="lesson-search">查找课程 / 概念</label>
+    <input id="lesson-search" type="search" placeholder="例如：异步、密钥、测试">
+    <nav id="lesson-nav" aria-label="课程目录"></nav>
+    <div class="sidebar-bottom"><div class="progress-label"><span>已自测通过</span><strong id="progress-label">0 / 10</strong></div><progress id="course-progress" max="10" value="0">0%</progress><p>完成标记仅保存在当前浏览器。</p><button id="browse-source" class="sidebar-button">⌘ &nbsp; 打开源码索引</button></div>
+  </aside>
+  <div class="workspace">
+    <header class="topbar"><span>你的项目，就是教材。</span><div><span class="local-badge"><i></i> 离线可读</span><button id="print-lesson" class="plain">打印本课 / 存为 PDF</button></div></header>
+    <main id="lesson" tabindex="-1"></main>
+    <footer class="page-footer"><span>先提出可检验的假设，再改一小处。</span><span id="snapshot-date"></span></footer>
+  </div>
+  <dialog id="source-dialog" aria-labelledby="source-title">
+    <div class="source-head"><div><span class="eyebrow">WORKING TREE SNAPSHOT</span><h2 id="source-title">源码索引</h2></div><button id="close-source" class="secondary">关闭 <kbd>Esc</kbd></button></div>
+    <p class="source-notice">这里展示制作课程时的真实源码快照，包含当时的未提交改动。阅读不会修改项目；后续源码改变后，可按 teach/README.md 更新快照。</p>
+    <div class="source-controls"><label>文件<select id="source-file"></select></label><label>在文件中查找<input id="source-search" type="search" placeholder="函数名或关键字"></label><button id="source-find" class="secondary">查找下一处</button></div>
+    <div id="source-meta" class="source-meta" aria-live="polite"></div>
+    <div class="source-scroll" tabindex="0" aria-label="带行号的源码"><pre id="source-code"></pre></div>
+  </dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <noscript><p>请允许本地 JavaScript 运行以阅读交互课程。所有脚本位于 teach 文件夹内，无需联网或 API 密钥。</p></noscript>
+</body>
+</html>
