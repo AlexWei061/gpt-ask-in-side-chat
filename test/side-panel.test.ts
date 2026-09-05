@@ -132,7 +132,26 @@ describe("side panel", () => {
     holder.innerHTML = html;
     expect(holder.querySelector(".math-fallback")).toBeTruthy();
     expect(holder.querySelector("img")).toBeNull();
-    expect(html).not.toMatch(/onerror|<script/i);
+    expect(holder.querySelector("[onerror], script")).toBeNull();
+    expect(holder.textContent).toContain(String.raw`\definitelyUnknown{<img src=x onerror=alert(1)>}`);
+  });
+
+  it("keeps unfinished code fences and marker-like user text verbatim", () => {
+    const holder = document.createElement("div");
+    holder.innerHTML = renderMarkdown("SIDECHATCODE0TOKEN SIDECHATFORMULA0TOKEN\n\n```tex\n$raw$\n\\[raw\\]", document);
+    expect(holder.querySelector(".katex")).toBeNull();
+    expect(holder.textContent).toContain("SIDECHATCODE0TOKEN SIDECHATFORMULA0TOKEN");
+    expect(holder.querySelector("pre code")?.textContent).toContain("$raw$");
+    expect(holder.querySelector("pre code")?.textContent).toContain(String.raw`\[raw\]`);
+  });
+
+  it("does not treat multiline code spans or indented code as math", () => {
+    const holder = document.createElement("div");
+    holder.innerHTML = renderMarkdown("``line one\n$raw$ and `tick`\nline three``\n\n    \\[raw\\]\n    $raw$", document);
+    expect(holder.querySelector(".katex")).toBeNull();
+    expect(holder.querySelectorAll("code")).toHaveLength(2);
+    expect(holder.textContent).not.toContain("SIDECHAT");
+    expect(holder.textContent).toContain("$raw$");
   });
 
   it("keeps draft before acceptance and retries the original payload once", () => {
