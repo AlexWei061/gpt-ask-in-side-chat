@@ -1,6 +1,6 @@
 # Chinese ChatGPT-Style Side Panel and Math Rendering Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Render common Markdown LaTeX in the side chat, restyle the panel to match ChatGPT web, and translate every user-visible extension surface into Chinese.
 
@@ -29,7 +29,7 @@
 - Modify: `src/content/ui/markdown.ts`
 - Test: `test/side-panel.test.ts`
 
-- [ ] **Step 1: Write failing formula-rendering tests**
+- [x] **Step 1: Write failing formula-rendering tests**
 
 Add focused tests to `test/side-panel.test.ts` before installing or importing KaTeX:
 
@@ -71,7 +71,7 @@ it("falls back to escaped source for invalid LaTeX without weakening HTML saniti
 });
 ```
 
-- [ ] **Step 2: Run the focused test and verify RED**
+- [x] **Step 2: Run the focused test and verify RED**
 
 Run:
 
@@ -81,7 +81,7 @@ npx vitest run test/side-panel.test.ts
 
 Expected: the new tests fail because no `.katex`, `.katex-display`, or `.math-fallback` nodes exist; the existing sanitization tests remain green.
 
-- [ ] **Step 3: Install the local renderer**
+- [x] **Step 3: Install the local renderer**
 
 Run:
 
@@ -91,7 +91,7 @@ npm install katex@^0.18.5
 
 Expected: `package.json` and `package-lock.json` add `katex`; no CDN URL or runtime network loader is introduced.
 
-- [ ] **Step 4: Implement the math boundary**
+- [x] **Step 4: Implement the math boundary**
 
 Create `src/content/ui/math.ts` with a small, testable pipeline:
 
@@ -186,7 +186,7 @@ insertMath(holder, extracted.formulas, document);
 return holder.innerHTML;
 ```
 
-- [ ] **Step 5: Verify GREEN and commit**
+- [x] **Step 5: Verify GREEN and commit**
 
 Run:
 
@@ -215,7 +215,7 @@ git commit -m "feat: render side-chat math with KaTeX"
 - Test: `test/manifest.test.ts`
 - Test: `test/side-panel.test.ts`
 
-- [ ] **Step 1: Write failing asset tests**
+- [x] **Step 1: Write failing asset tests**
 
 Extend `test/manifest.test.ts`:
 
@@ -245,7 +245,7 @@ it("loads the packaged KaTeX stylesheet inside the shadow root", () => {
 
 Give the test Chrome mock a deterministic `runtime.getURL`, such as `(path) => chrome-extension://test/${path}`.
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run:
 
@@ -255,7 +255,7 @@ npx vitest run test/manifest.test.ts test/side-panel.test.ts
 
 Expected: missing CSS/font files, missing manifest entries, and missing Shadow DOM stylesheet link.
 
-- [ ] **Step 3: Copy production assets and load their stylesheet**
+- [x] **Step 3: Copy production assets and load their stylesheet**
 
 In `scripts/build.mjs`, resolve `katex/dist/katex.min.css`, copy it to `dist/katex/katex.min.css`, create `dist/katex/fonts`, and copy only `.woff2` files from `node_modules/katex/dist/fonts`. Import `readdir` from `node:fs/promises`; do not copy source maps, WOFF, or TTF fallbacks.
 
@@ -282,7 +282,7 @@ katexStyle.href = typeof chrome !== "undefined" && chrome.runtime?.getURL
 this.root.append(style, katexStyle);
 ```
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 Run:
 
@@ -310,7 +310,7 @@ git commit -m "build: package local KaTeX assets"
 - Test: `test/side-panel.test.ts`
 - Test: `test/protocol.test.ts`
 
-- [ ] **Step 1: Write failing structure and copy tests**
+- [x] **Step 1: Write failing structure and copy tests**
 
 Add one behavior-focused side-panel test:
 
@@ -342,7 +342,7 @@ expect(t("askInSideChat", "en-US")).toBe("在侧栏中提问");
 expect(t("composerPlaceholder", "zh-CN")).toBe("针对所选内容提问……");
 ```
 
-- [ ] **Step 2: Run focused tests and verify RED**
+- [x] **Step 2: Run focused tests and verify RED**
 
 Run:
 
@@ -352,7 +352,7 @@ npx vitest run test/side-panel.test.ts test/protocol.test.ts
 
 Expected: English copy and the old card/composer structure make the new assertions fail.
 
-- [ ] **Step 3: Change markup and copy without changing state behavior**
+- [x] **Step 3: Change markup and copy without changing state behavior**
 
 Use these exact Chinese UI strings in `side-panel.ts`:
 
@@ -376,7 +376,7 @@ Show the button glyph `↑` while passing `aria-label="发送"`; extend `button(
 
 Replace `src/shared/i18n.ts` copy values so the selection action reads `在侧栏中提问` and the composer/extraction messages are always Chinese. Keep the existing function signature so callers and tests do not need a new abstraction.
 
-- [ ] **Step 4: Apply the approved A styling**
+- [x] **Step 4: Apply the approved A styling**
 
 In `styles.ts` retain fixed positioning, resize hit area, z-index, disabled states, and accessibility. Change only the presentation:
 
@@ -399,7 +399,7 @@ form { border-top:0; padding:10px 12px 13px; }
 .controls { margin:7px 4px 0; color:#a8a8a8; }
 ```
 
-- [ ] **Step 5: Verify behavior and commit**
+- [x] **Step 5: Verify behavior and commit**
 
 Run:
 
@@ -439,7 +439,7 @@ git commit -m "feat: adopt Chinese ChatGPT-style side panel"
 - Test: `test/background-index.test.ts`
 - Test: `test/manifest.test.ts`
 
-- [ ] **Step 1: Update tests first to require Chinese output**
+- [x] **Step 1: Update tests first to require Chinese output**
 
 Change visible-copy assertions to exact Chinese, including:
 
@@ -456,7 +456,7 @@ expect(response).toHaveBeenCalledWith({
 
 In `test/provider.test.ts` and `test/settings.test.ts`, preserve code/retryability assertions and replace English message regexes with the matching Chinese phrases. In `test/manifest.test.ts`, assert the Chinese manifest name, description, and action title.
 
-- [ ] **Step 2: Run the affected tests and verify RED**
+- [x] **Step 2: Run the affected tests and verify RED**
 
 Run:
 
@@ -466,7 +466,7 @@ npx vitest run test/options.test.ts test/content-index.test.ts test/provider.tes
 
 Expected: failures are only English-versus-Chinese copy mismatches.
 
-- [ ] **Step 3: Translate the options surface**
+- [x] **Step 3: Translate the options surface**
 
 Use these settings labels and actions in `src/options/index.ts`:
 
@@ -479,7 +479,7 @@ Translate both disclosure paragraphs faithfully without changing their meaning. 
 
 Set `public/options.html` title to `侧边对话助手设置`. Update `options/styles.css` only enough to use the same neutral ChatGPT palette (`#212121`, `#2f2f2f`, `#ececec`, `#10a37f`) while retaining the current responsive form layout and clear destructive-button styling.
 
-- [ ] **Step 4: Translate runtime errors without translating model prompts**
+- [x] **Step 4: Translate runtime errors without translating model prompts**
 
 Translate all error/notice strings that can reach the side panel or settings page in the listed content/background files. Preserve:
 
@@ -510,7 +510,7 @@ Set `public/manifest.json` visible metadata to:
 }
 ```
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 Run:
 
@@ -535,7 +535,7 @@ git commit -m "feat: translate extension interface to Chinese"
 - Modify: `e2e/side-chat.spec.ts`
 - Test: all tests and production package
 
-- [ ] **Step 1: Make E2E require Chinese UI and rendered math**
+- [x] **Step 1: Make E2E require Chinese UI and rendered math**
 
 Update the provider fixture to stream a response containing `String.raw` with both inline and display LaTeX. Change locators to `在侧栏中提问`, `发送`, and the Chinese options heading. After the response, assert:
 
@@ -546,7 +546,7 @@ await expect(panel).toContainText("Side answer");
 
 Keep the existing provider-request assertions and history-after-reload assertion.
 
-- [ ] **Step 2: Run E2E and verify GREEN**
+- [x] **Step 2: Run E2E and verify GREEN**
 
 Run:
 
@@ -556,7 +556,7 @@ npm run e2e
 
 Expected: one Playwright test passes with the loaded MV3 extension, Chinese UI, persisted history, and two rendered formulas.
 
-- [ ] **Step 3: Run the complete release gate**
+- [x] **Step 3: Run the complete release gate**
 
 Run:
 
@@ -570,7 +570,7 @@ npm run package
 
 Expected: all tests pass; the final `npm run package` rebuilds production `dist` after E2E and creates `release/side-chat-companion-0.1.0.zip` without E2E-only host permissions.
 
-- [ ] **Step 4: Inspect production artifacts**
+- [x] **Step 4: Inspect production artifacts**
 
 Run:
 
@@ -582,7 +582,7 @@ git status --short
 
 Expected: no test endpoint/key is found; the checksum prints; only the pre-existing untracked `.DS_Store` remains plus the intended E2E change before commit.
 
-- [ ] **Step 5: Commit E2E coverage**
+- [x] **Step 5: Commit E2E coverage**
 
 ```bash
 git add e2e/side-chat.spec.ts
@@ -600,3 +600,12 @@ In `chrome://extensions`, reload the unpacked extension from `/Users/alex/Alex/c
 5. Confirm settings, errors, confirmation dialogs, attachment reselection, and side-panel actions are Chinese.
 
 Do not keep service-worker DevTools open during the long-response check because that would invalidate the lifecycle test.
+
+## Execution record (2026-09-05)
+
+- Implemented local KaTeX rendering, bundled CSS/WOFF2 fonts and KaTeX license, approved A-style Chinese side panel, and Chinese settings/errors.
+- Added regressions for unfinished fences, multiline/indented code, literal marker text, and escaped invalid-formula fallback. Invalid source is retained using textContent; security assertions check DOM elements/attributes, not harmless text.
+- Automated checks passed: 183 unit tests; TypeScript; Chromium extension E2E covering Chinese selection action, two rendered formulas with loaded KaTeX CSS, and persisted history after reload.
+- Screenshots inspected under test-results/side-chat-selection-opens--b34f1-ose-history-survives-reload/.
+- Live Chrome validation was attempted but interrupted by active user navigation and repeated browser-control timeouts. No new real-provider request was sent. Remaining manual step: reload the unpacked extension and refresh ChatGPT, then confirm the saved real-provider conversation.
+- Current feature branch and worktree are retained for local Chrome testing. No merge, push, or store publication was performed.
