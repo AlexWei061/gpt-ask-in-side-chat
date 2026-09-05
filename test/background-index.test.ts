@@ -82,7 +82,7 @@ describe("background listeners", () => {
     const response = vi.fn();
     localGet.mockRejectedValueOnce(new Error("storage failed"));
     expect(message.listener?.({ type: "settings:get" }, {}, response)).toBe(true);
-    await vi.waitFor(() => expect(response).toHaveBeenCalledWith({ ok: false, error: { code: "STORAGE_FAILED", message: "The extension could not complete the request.", retryable: false } }));
+    await vi.waitFor(() => expect(response).toHaveBeenCalledWith({ ok: false, error: { code: "STORAGE_FAILED", message: "扩展无法完成请求。", retryable: false } }));
   });
 
   it("tests only the saved provider endpoint with the session-bound key", async () => {

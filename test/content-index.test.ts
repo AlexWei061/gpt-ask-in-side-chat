@@ -138,7 +138,7 @@ describe("content bootstrap", () => {
     const root = openAndSubmit("question");
     await vi.waitFor(() => expect(root.querySelector("dialog")).toBeTruthy());
     root.querySelector<HTMLDialogElement>("dialog")!.dispatchEvent(new Event("cancel"));
-    await vi.waitFor(() => expect(root.textContent).toContain("No request was sent"));
+    await vi.waitFor(() => expect(root.textContent).toContain("未发送请求"));
     expect(ports).toHaveLength(0);
     expect(root.querySelector<HTMLTextAreaElement>("textarea")!.disabled).toBe(false);
   });
@@ -193,7 +193,7 @@ describe("content bootstrap", () => {
     const range = document.createRange(); range.selectNodeContents(document.querySelector("#quote")!); document.getSelection()?.addRange(range); document.dispatchEvent(new Event("selectionchange")); document.querySelector<HTMLButtonElement>("[data-side-chat-selection-action]")!.click();
     const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!; const input = root.querySelector<HTMLTextAreaElement>("textarea")!; input.value = "again"; input.dispatchEvent(new Event("input")); root.querySelector<HTMLFormElement>("form")!.requestSubmit();
     const port = ports.at(-1)!; port.disconnect();
-    expect(root.textContent).toContain("connection closed unexpectedly"); expect(root.querySelector<HTMLButtonElement>("[data-action=retry]")).toBeTruthy(); expect(root.querySelector<HTMLTextAreaElement>("textarea")!.disabled).toBe(false);
+    expect(root.textContent).toContain("侧边对话连接意外中断"); expect(root.querySelector<HTMLButtonElement>("[data-action=retry]")).toBeTruthy(); expect(root.querySelector<HTMLTextAreaElement>("textarea")!.disabled).toBe(false);
     root.querySelector<HTMLButtonElement>("[data-action=retry]")!.click();
     expect(ports).toHaveLength(2);
   });
@@ -292,7 +292,7 @@ describe("content bootstrap", () => {
     const first = ports.at(-1)!;
     const firstStart = first.sent.at(-1) as { requestId: string };
     first.emit({ type: "error", requestId: firstStart.requestId, error: { code: "NETWORK_FAILED", message: "missing retryable" } });
-    expect(root.textContent).toContain("response was invalid");
+    expect(root.textContent).toContain("侧边对话响应无效");
     expect(root.querySelector("[data-action=retry]")).toBeTruthy();
     expect(first.disconnectCount).toBe(1);
 
@@ -302,7 +302,7 @@ describe("content bootstrap", () => {
     first.emit({ type: 123, requestId: secondStart.requestId });
     expect(second.disconnectCount).toBe(0);
     second.emit({ type: "done", requestId: secondStart.requestId, record: sideRecord("other-conversation", "WRONG") });
-    expect(root.textContent).toContain("response was invalid");
+    expect(root.textContent).toContain("侧边对话响应无效");
     expect(root.textContent).not.toContain("WRONG");
     expect(second.disconnectCount).toBe(1);
   });
@@ -318,7 +318,7 @@ describe("content bootstrap", () => {
     const { bootstrapPromise } = await import("../src/content/index");
     await bootstrapPromise;
     const root = openAndSubmit("connect again");
-    expect(root.textContent).toContain("Could not start");
+    expect(root.textContent).toContain("无法启动");
     expect(root.querySelector("[data-action=retry]")).toBeTruthy();
     root.querySelector<HTMLButtonElement>("[data-action=retry]")!.click();
     expect(connect).toHaveBeenCalledTimes(2);

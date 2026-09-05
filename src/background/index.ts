@@ -57,7 +57,7 @@ chrome.runtime.onConnect.addListener((port) => {
     }
     if (controllers.has(message.requestId)) return;
     if (clearingAll > 0 || (clearingConversations.get(message.payload.conversationId) ?? 0) > 0) {
-      post(port, { type: "error", requestId: message.requestId, error: { code: "STORAGE_FAILED", message: "Side-chat history is being cleared.", retryable: true } });
+      post(port, { type: "error", requestId: message.requestId, error: { code: "STORAGE_FAILED", message: "正在清空侧边对话记录。", retryable: true } });
       return;
     }
 
@@ -106,7 +106,7 @@ async function handleRuntimeRequest(request: RuntimeRequest): Promise<RuntimeRes
       case "history:load": return { ok: true, value: await historyStore.get(request.conversationId) };
       case "history:clear": await clearConversation(request.conversationId); return { ok: true };
       case "history:clear-all": await clearAllConversations(); return { ok: true };
-      default: return { ok: false, error: { code: "STORAGE_FAILED", message: "Unsupported runtime request." } };
+      default: return { ok: false, error: { code: "STORAGE_FAILED", message: "不支持此扩展请求。" } };
     }
   } catch (error) {
     return { ok: false, error: normalizeError(error) };
@@ -115,11 +115,11 @@ async function handleRuntimeRequest(request: RuntimeRequest): Promise<RuntimeRes
 
 async function testProviderConnection(): Promise<void> {
   const settings = await loadInternalSettings();
-  if (!settings.privacyAccepted) throw new ExtensionError("PERMISSION_REQUIRED", "Accept the privacy disclosure first.");
-  if (!settings.config) throw new ExtensionError("PERMISSION_REQUIRED", "Configure a model endpoint first.");
-  if (!settings.apiKey) throw new ExtensionError("KEY_REQUIRED", "Enter an API key for this Chrome session.");
+  if (!settings.privacyAccepted) throw new ExtensionError("PERMISSION_REQUIRED", "请先同意使用说明。");
+  if (!settings.config) throw new ExtensionError("PERMISSION_REQUIRED", "请先配置模型接口。");
+  if (!settings.apiKey) throw new ExtensionError("KEY_REQUIRED", "请输入本次 Chrome 会话的 API 密钥。");
   if (!await chrome.permissions.contains({ origins: [permissionPattern(settings.config.baseUrl)] })) {
-    throw new ExtensionError("PERMISSION_REQUIRED", "The configured endpoint permission is missing. Save settings to grant access again.");
+    throw new ExtensionError("PERMISSION_REQUIRED", "缺少接口访问权限，请保存设置以重新授权。");
   }
   await streamChatCompletion({
     fetcher: fetch,
@@ -181,10 +181,10 @@ function post(port: chrome.runtime.Port, message: StreamServerMessage): void {
 
 function normalizeError(error: unknown): { code: ExtensionErrorCode; message: string; retryable: boolean } {
   if (error instanceof ExtensionError) return { code: error.code, message: error.message, retryable: error.retryable };
-  return { code: "STORAGE_FAILED", message: "The extension could not complete the request.", retryable: false };
+  return { code: "STORAGE_FAILED", message: "扩展无法完成请求。", retryable: false };
 }
 
 function normalizeStreamError(error: unknown): { code: ExtensionErrorCode; message: string; retryable: boolean } {
   if (error instanceof ExtensionError) return { code: error.code, message: error.message, retryable: error.retryable };
-  return { code: "NETWORK_FAILED", message: "The AI provider connection failed.", retryable: true };
+  return { code: "NETWORK_FAILED", message: "AI 服务商连接失败。", retryable: true };
 }

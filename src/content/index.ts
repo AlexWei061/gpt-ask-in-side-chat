@@ -11,7 +11,7 @@ type UiPreferences = { panelWidth: number };
 
 function request<T>(message: unknown, valid: (value: unknown) => value is T = ((_: unknown): _ is T => true)): Promise<T> {
   return new Promise((resolve, reject) => chrome.runtime.sendMessage(message, (response: unknown) => {
-    const generic = () => reject(new Error("The extension could not contact its background service."));
+    const generic = () => reject(new Error("扩展无法连接后台服务。"));
     if (chrome.runtime.lastError || !response || typeof response !== "object" || typeof (response as { ok?: unknown }).ok !== "boolean") return generic();
     const result = response as RuntimeResponse<T>;
     if (!result.ok) return isRuntimeError(result.error) ? reject(new Error(result.error.message)) : generic();
@@ -43,13 +43,13 @@ async function bootstrapImpl(): Promise<void> {
   };
   const panel = new SidePanel(document, {
     onSend: (submission) => { void start(submission); },
-    onResize: (width) => { void request({ type: "ui:set-width", width }).catch(() => panel.setNotice("Could not save panel width.")); },
+    onResize: (width) => { void request({ type: "ui:set-width", width }).catch(() => panel.setNotice("无法保存侧栏宽度。")); },
     onClear: () => clear(),
   });
   const contextSummary = (capturedMessages: number): PanelContextSummary => ({
     capturedMessages,
-    endpointOrigin: publicSettings.config ? new URL(publicSettings.config.baseUrl).origin : "Not configured",
-    model: publicSettings.config?.model ?? "Not configured",
+    endpointOrigin: publicSettings.config ? new URL(publicSettings.config.baseUrl).origin : "尚未配置",
+    model: publicSettings.config?.model ?? "尚未配置",
     contextWindowTokens: publicSettings.config?.contextWindowTokens ?? 0,
   });
   const selection = new SelectionController(document, (quote) => {
@@ -62,13 +62,13 @@ async function bootstrapImpl(): Promise<void> {
     try {
       const record = await request<SideChatRecord | null>({ type: "history:load", conversationId }, (value): value is SideChatRecord | null => value === null || (isSideChatRecord(value) && value.conversationId === conversationId));
       if (!disposed && token === generation && adapter.getConversationId() === conversationId) panel.setMessages(record?.messages ?? []);
-    } catch { if (!disposed && token === generation) panel.setNotice("Could not load side-chat history."); }
+    } catch { if (!disposed && token === generation) panel.setNotice("无法加载侧边对话记录。"); }
   }
   async function clear(): Promise<void> {
     const token = ++generation; const id = adapter.getConversationId(); if (!id) return;
     disconnectStream(); panel.resetRequest();
     try { await request({ type: "history:clear", conversationId: id }); if (!disposed && token === generation && adapter.getConversationId() === id) panel.setMessages([]); }
-    catch { if (!disposed && token === generation && adapter.getConversationId() === id) panel.setNotice("Could not clear side-chat history."); }
+    catch { if (!disposed && token === generation && adapter.getConversationId() === id) panel.setNotice("无法清空侧边对话记录。"); }
   }
   async function start(submission: PanelSend): Promise<void> {
     const token = ++generation;
@@ -81,29 +81,29 @@ async function bootstrapImpl(): Promise<void> {
       try {
         attachments = await resolveAttachments(descriptors, publicSettings.config?.supportsImages === true, panel);
       } catch (error) {
-        if (!disposed && token === generation) panel.setError({ message: error instanceof Error ? error.message : "An attachment could not be prepared.", retryable: true });
+        if (!disposed && token === generation) panel.setError({ message: error instanceof Error ? error.message : "无法准备附件。", retryable: true });
         return;
       }
     }
     if (disposed || token !== generation || adapter.getConversationId() !== conversationId) { panel.resetRequest(); return; }
     disconnectStream(); const requestId = crypto.randomUUID(); let port: chrome.runtime.Port;
-    try { port = chrome.runtime.connect({ name: "side-chat-stream" }); } catch { panel.setError({ message: "Could not start the side-chat request.", retryable: true }); return; }
+    try { port = chrome.runtime.connect({ name: "side-chat-stream" }); } catch { panel.setError({ message: "无法启动侧边对话请求。", retryable: true }); return; }
     stream = { port, requestId, conversationId };
     try { port.onMessage.addListener((raw: unknown) => {
       const candidate = raw as { requestId?: unknown; type?: unknown } | null;
       if (!stream || stream.port !== port || candidate?.requestId !== stream.requestId) return;
-      if (!isStreamEvent(raw)) { panel.setError({ message: "The side-chat response was invalid.", retryable: true }); disconnectStream(false); return; }
+      if (!isStreamEvent(raw)) { panel.setError({ message: "侧边对话响应无效。", retryable: true }); disconnectStream(false); return; }
       const event = raw;
       if (event.type === "accepted") panel.setAccepted(event.approximateTokens);
       else if (event.type === "delta") panel.appendDelta(event.text);
-      else if (event.type === "done") { if (event.record.conversationId === stream.conversationId) panel.complete(event.record.messages); else panel.setError({ message: "The side-chat response was invalid.", retryable: true }); disconnectStream(false); }
+      else if (event.type === "done") { if (event.record.conversationId === stream.conversationId) panel.complete(event.record.messages); else panel.setError({ message: "侧边对话响应无效。", retryable: true }); disconnectStream(false); }
       else if (event.type === "error") { panel.setError({ message: event.error.message, retryable: event.error.retryable }); disconnectStream(false); }
     });
-    port.onDisconnect.addListener(() => { if (stream?.port === port) { stream = null; panel.setError({ message: "The side-chat connection closed unexpectedly.", retryable: true }); } });
+    port.onDisconnect.addListener(() => { if (stream?.port === port) { stream = null; panel.setError({ message: "侧边对话连接意外中断。", retryable: true }); } });
     port.postMessage({ type: "start", requestId, payload: { conversationId, mainMessages: extraction.messages, quote: submission.quote, question: submission.question, attachments, compressOldContext: submission.compressOldContext } }); }
-    catch { panel.setError({ message: "Could not start the side-chat request.", retryable: true }); disconnectStream(false); }
+    catch { panel.setError({ message: "无法启动侧边对话请求。", retryable: true }); disconnectStream(false); }
   }
-  try { panel.setWidth((await request<UiPreferences>({ type: "ui:get" }, isUi)).panelWidth); } catch { panel.setError({ message: "Could not load panel preferences.", retryable: false }); }
+  try { panel.setWidth((await request<UiPreferences>({ type: "ui:get" }, isUi)).panelWidth); } catch { panel.setError({ message: "无法加载侧栏偏好设置。", retryable: false }); }
   let url = document.location.href;
   const checkNavigation = () => { if (document.location.href !== url) { url = document.location.href; void loadConversation(); } };
   const observer = new MutationObserver(checkNavigation); observer.observe(document.documentElement, { childList: true, subtree: true });
@@ -114,7 +114,7 @@ async function bootstrapImpl(): Promise<void> {
   await loadConversation();
 }
 
-export const bootstrapPromise = bootstrap().catch(() => { console.warn("Side chat could not start."); });
+export const bootstrapPromise = bootstrap().catch(() => { console.warn("侧边对话无法启动。"); });
 
 function safeAttachmentUrl(value: string, origin: string): URL | null {
   try {
@@ -150,9 +150,9 @@ async function resolveAttachments(descriptors: AttachmentDescriptor[], supportsI
   }
   if (missing.length === 0) return prepared;
   const replacements = await panel.resolveMissingAttachments(missing.map((descriptor) => descriptor.name));
-  if (replacements === undefined) throw new Error("Attachment selection was canceled. No request was sent.");
+  if (replacements === undefined) throw new Error("已取消附件选择，未发送请求。");
   if (replacements === null) return prepared;
-  if (replacements.length !== missing.length) throw new Error("The missing attachment selection was incomplete.");
+  if (replacements.length !== missing.length) throw new Error("缺失的附件尚未全部选齐。");
   for (const [index, file] of replacements.entries()) prepared.push(await prepareFile(file, missing[index]!.sourceMessageIndex, supportsImages));
   return prepared;
 }

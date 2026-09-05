@@ -16,7 +16,7 @@ type PdfLoader = (source: { data: ArrayBuffer }) => PdfTask;
 const chromeRuntime = globalThis.chrome?.runtime;
 if (chromeRuntime?.getURL) pdfjs.GlobalWorkerOptions.workerSrc = chromeRuntime.getURL("pdf.worker.min.mjs");
 
-function failed(): ExtensionError { return new ExtensionError("ATTACHMENT_FAILED", "This attachment could not be read locally.", true); }
+function failed(): ExtensionError { return new ExtensionError("ATTACHMENT_FAILED", "无法在本地读取此附件。", true); }
 function validName(name: string): boolean { return Boolean(name.trim() && name.trim().length <= 255 && !/[\0/\\]/.test(name)); }
 function textFile(file: File): boolean { return file.type.startsWith("text/") || ["application/json", "application/csv"].includes(file.type) || /\.(?:txt|md|markdown|json|csv|ts|tsx|js|jsx|py|java|c|cc|cpp|h|hpp|cs|go|rs|rb|php|html?|css|xml|yaml|yml|sql|sh|zsh)$/i.test(file.name); }
 function pdfFile(file: File): boolean { return file.type === "application/pdf" || /\.pdf$/i.test(file.name); }

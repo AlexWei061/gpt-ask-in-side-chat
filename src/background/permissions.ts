@@ -1,11 +1,11 @@
 export function normalizeBaseUrl(input: string): string {
   const url = new URL(input.trim());
   if (url.username || url.password) {
-    throw new Error("The model endpoint must not include credentials.");
+    throw new Error("模型接口地址不能包含用户名或密码等凭据。");
   }
   const local = url.hostname === "localhost" || url.hostname === "127.0.0.1";
   if (url.protocol !== "https:" && !(local && url.protocol === "http:")) {
-    throw new Error("The model endpoint must use HTTPS, except for localhost.");
+    throw new Error("模型接口必须使用 HTTPS，本地地址除外。");
   }
   url.hash = "";
   url.search = "";

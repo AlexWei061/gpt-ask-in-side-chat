@@ -10,6 +10,8 @@ describe("release manifest", () => {
     const manifest = JSON.parse(await readFile("public/manifest.json", "utf8"));
 
     expect(manifest.manifest_version).toBe(3);
+    expect(manifest.name).toBe("侧边对话助手");
+    expect(manifest.action.default_title).toBe("侧边对话助手");
     expect(manifest.permissions).toEqual(["storage"]);
     expect(manifest.content_scripts[0].matches).toEqual(["https://chatgpt.com/*"]);
     expect(manifest.optional_host_permissions).toEqual([

@@ -29,13 +29,14 @@ describe("options onboarding", () => {
   it("loads saved non-secret settings without exposing the session key", async () => {
     installChrome({ config: savedConfig, privacyAccepted: true, hasSessionKey: true });
     await loadOptions();
+    expect(document.querySelector("h1")?.textContent).toBe("侧边对话助手");
     expect(document.querySelector<HTMLInputElement>("#base-url")?.value).toBe(savedConfig.baseUrl);
     expect(document.querySelector<HTMLInputElement>("#model")?.value).toBe(savedConfig.model);
     expect(document.querySelector<HTMLInputElement>("#context-window")?.value).toBe("128000");
     expect(document.querySelector<HTMLInputElement>("#images")?.checked).toBe(true);
     expect(document.querySelector<HTMLInputElement>("#privacy")?.checked).toBe(true);
     expect(document.querySelector<HTMLInputElement>("#api-key")?.value).toBe("");
-    expect(document.querySelector<HTMLInputElement>("#api-key")?.placeholder).toMatch(/already set/i);
+    expect(document.querySelector<HTMLInputElement>("#api-key")?.placeholder).toMatch(/已设置密钥/);
   });
 
   it("requests only the normalized endpoint origin, saves settings, and keeps an existing blank key", async () => {
@@ -46,7 +47,7 @@ describe("options onboarding", () => {
     await vi.waitFor(() => expect(chromeMock.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "settings:save", config: savedConfig, privacyAccepted: true }), expect.any(Function)));
     expect(chromeMock.request).toHaveBeenCalledWith({ origins: ["https://api.example.com/*"] });
     expect(chromeMock.sendMessage.mock.calls.some(([value]) => value.type === "key:set")).toBe(false);
-    expect(document.querySelector("#status")?.textContent).toMatch(/saved/i);
+    expect(document.querySelector("#status")?.textContent).toMatch(/已保存/);
   });
 
   it("does not save before disclosure acceptance or when endpoint permission is denied", async () => {
@@ -56,12 +57,12 @@ describe("options onboarding", () => {
     document.querySelector<HTMLInputElement>("#model")!.value = "model";
     document.querySelector<HTMLInputElement>("#context-window")!.value = "4096";
     document.querySelector<HTMLFormElement>("#settings")!.requestSubmit();
-    await vi.waitFor(() => expect(document.querySelector("#status")?.textContent).toMatch(/disclosure/i));
+    await vi.waitFor(() => expect(document.querySelector("#status")?.textContent).toMatch(/使用说明/));
     expect(chromeMock.request).not.toHaveBeenCalled();
     document.querySelector<HTMLInputElement>("#privacy")!.checked = true;
     document.querySelector<HTMLFormElement>("#settings")!.requestSubmit();
     await vi.waitFor(() => expect(chromeMock.request).toHaveBeenCalledOnce());
-    await vi.waitFor(() => expect(document.querySelector("#status")?.textContent).toMatch(/not granted/i));
+    await vi.waitFor(() => expect(document.querySelector("#status")?.textContent).toMatch(/未获得/));
     expect(chromeMock.sendMessage.mock.calls.some(([value]) => value.type === "settings:save")).toBe(false);
   });
 
@@ -74,10 +75,10 @@ describe("options onboarding", () => {
     await vi.waitFor(() => expect(chromeMock.sendMessage).toHaveBeenCalledWith({ type: "key:set", apiKey: "secret" }, expect.any(Function)));
     document.querySelector<HTMLButtonElement>("#test")!.click();
     await vi.waitFor(() => expect(chromeMock.sendMessage).toHaveBeenCalledWith({ type: "provider:test" }, expect.any(Function)));
-    await vi.waitFor(() => expect(document.querySelector("#status")?.textContent).toMatch(/connection succeeded/i));
+    await vi.waitFor(() => expect(document.querySelector("#status")?.textContent).toMatch(/连接成功/));
     document.querySelector<HTMLButtonElement>("#forget")!.click();
     await vi.waitFor(() => expect(chromeMock.sendMessage).toHaveBeenCalledWith({ type: "key:forget" }, expect.any(Function)));
-    await vi.waitFor(() => expect(document.querySelector("#status")?.textContent).toMatch(/forgotten/i));
+    await vi.waitFor(() => expect(document.querySelector("#status")?.textContent).toMatch(/已忘记/));
     document.querySelector<HTMLButtonElement>("#clear")!.click();
     await vi.waitFor(() => expect(chromeMock.sendMessage).toHaveBeenCalledWith({ type: "history:clear-all" }, expect.any(Function)));
   });
@@ -99,7 +100,7 @@ describe("options onboarding", () => {
     document.querySelector<HTMLInputElement>("#base-url")!.value = "https://new.example/v1";
     document.querySelector<HTMLInputElement>("#api-key")!.value = "new-key";
     document.querySelector<HTMLFormElement>("#settings")!.requestSubmit();
-    await vi.waitFor(() => expect(document.querySelector("#status")?.textContent).toMatch(/could not be removed/i));
+    await vi.waitFor(() => expect(document.querySelector("#status")?.textContent).toMatch(/无法移除/));
     document.querySelector<HTMLFormElement>("#settings")!.requestSubmit();
     await vi.waitFor(() => expect(chromeMock.remove).toHaveBeenCalledTimes(2));
     expect(chromeMock.remove).toHaveBeenLastCalledWith({ origins: ["https://api.example.com/*"] });

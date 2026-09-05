@@ -11,7 +11,7 @@ export function assertWithinBudget(approximateTokens: number, contextWindowToken
   if (approximateTokens > budget) {
     throw new ExtensionError(
       "CONTEXT_OVERFLOW",
-      `The request is approximately ${approximateTokens} tokens, exceeding the ${budget}-token context budget.`,
+      `请求约需 ${approximateTokens} 个词元，超出了 ${budget} 个词元的上下文预算。`,
     );
   }
 }

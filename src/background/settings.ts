@@ -20,11 +20,11 @@ export type InternalSettings = {
 
 export function normalizeProviderConfig(value: unknown): ProviderConfig {
   if (!value || typeof value !== "object") {
-    throw new Error("Provider configuration is invalid.");
+    throw new Error("模型服务商配置无效。");
   }
   const config = value as Record<string, unknown>;
   if (typeof config.model !== "string" || !config.model.trim()) {
-    throw new Error("Provider model is required.");
+    throw new Error("请输入模型名称。");
   }
   if (
     typeof config.contextWindowTokens !== "number"
@@ -33,13 +33,13 @@ export function normalizeProviderConfig(value: unknown): ProviderConfig {
     || config.contextWindowTokens < 1024
     || config.contextWindowTokens > MAX_CONTEXT_WINDOW_TOKENS
   ) {
-    throw new Error("Provider context window must be an integer between 1024 and 10000000.");
+    throw new Error("上下文窗口必须是 1024 到 10000000 之间的整数。");
   }
   if (typeof config.supportsImages !== "boolean") {
-    throw new Error("Provider image support must be a boolean.");
+    throw new Error("模型图片支持选项必须为是或否。");
   }
   if (typeof config.baseUrl !== "string") {
-    throw new Error("Provider base URL is required.");
+    throw new Error("请输入接口地址（Base URL）。");
   }
   return {
     baseUrl: normalizeBaseUrl(config.baseUrl),
@@ -112,7 +112,7 @@ export async function saveProviderConfig(
 export async function setSessionKey(apiKey: string): Promise<void> {
   const trimmedKey = apiKey.trim();
   if (!trimmedKey) {
-    throw new Error("Provider API key is required.");
+    throw new Error("请输入 API 密钥。");
   }
   const local = await chrome.storage.local.get(CONFIG_KEY);
   const config = normalizeProviderConfig(local[CONFIG_KEY]);

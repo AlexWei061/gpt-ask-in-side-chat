@@ -56,7 +56,7 @@ describe("provider settings", () => {
   });
 
   it("rejects credentials and removes every trailing path slash", () => {
-    expect(() => normalizeBaseUrl("https://key:secret@api.example.com/v1")).toThrow(/credentials/i);
+    expect(() => normalizeBaseUrl("https://key:secret@api.example.com/v1")).toThrow(/凭据/);
     expect(chatCompletionsUrl("https://api.example.com/v1///")).toBe(
       "https://api.example.com/v1/chat/completions",
     );
@@ -158,7 +158,7 @@ describe("provider settings", () => {
       supportsImages: false,
     }, true);
 
-    await expect(setSessionKey(" \t ")).rejects.toThrow(/required/i);
+    await expect(setSessionKey(" \t ")).rejects.toThrow(/请.*API 密钥/);
     await setSessionKey(" secret ");
     await expect(loadInternalSettings()).resolves.toMatchObject({ apiKey: " secret " });
   });

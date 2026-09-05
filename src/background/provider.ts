@@ -21,20 +21,20 @@ export type StreamArgs = {
 
 function responseError(status: number): ExtensionError {
   if (status === 401 || status === 403) {
-    return new ExtensionError("AUTHENTICATION_FAILED", "Authentication with the AI provider failed.");
+    return new ExtensionError("AUTHENTICATION_FAILED", "AI 服务商身份验证失败，请检查 API 密钥。");
   }
   if (status === 429) {
-    return new ExtensionError("RATE_LIMITED", "The AI provider rate limit was reached.", true);
+    return new ExtensionError("RATE_LIMITED", "已达到 AI 服务商的请求频率或额度限制。", true);
   }
   return new ExtensionError(
     "NETWORK_FAILED",
-    `The AI provider returned HTTP status ${status}.`,
+    `AI 服务商返回 HTTP 状态码 ${status}。`,
     status === 408 || status === 425 || status >= 500,
   );
 }
 
 function protocolError(): ExtensionError {
-  return new ExtensionError("PROTOCOL_FAILED", "The AI provider sent an invalid streaming response.", true);
+  return new ExtensionError("PROTOCOL_FAILED", "AI 服务商返回了无效的流式响应。", true);
 }
 
 function streamedProviderError(value: unknown): ExtensionError {
@@ -46,15 +46,15 @@ function streamedProviderError(value: unknown): ExtensionError {
     .toLowerCase();
   if (!identifier) throw protocolError();
   if (identifier.includes("rate_limit") || identifier.includes("insufficient_quota")) {
-    return new ExtensionError("RATE_LIMITED", "The AI provider rate limit was reached.", true);
+    return new ExtensionError("RATE_LIMITED", "已达到 AI 服务商的请求频率或额度限制。", true);
   }
   if (identifier.includes("auth") || identifier.includes("api_key") || identifier.includes("unauthorized")) {
-    return new ExtensionError("AUTHENTICATION_FAILED", "Authentication with the AI provider failed.");
+    return new ExtensionError("AUTHENTICATION_FAILED", "AI 服务商身份验证失败，请检查 API 密钥。");
   }
   if (identifier.includes("context_length") || identifier.includes("context_window") || identifier.includes("too_many_tokens")) {
-    return new ExtensionError("CONTEXT_OVERFLOW", "The request exceeds the configured provider context window.");
+    return new ExtensionError("CONTEXT_OVERFLOW", "请求超出了配置的模型上下文窗口。");
   }
-  return new ExtensionError("NETWORK_FAILED", "The AI provider rejected the streamed request.");
+  return new ExtensionError("NETWORK_FAILED", "AI 服务商拒绝了流式请求。");
 }
 
 function lineEndingLength(value: string, index: number, allowTrailingCr = false): number {
@@ -137,7 +137,7 @@ export async function streamChatCompletion({
     });
   } catch (error) {
     if (signal.aborted) throw error;
-    throw new ExtensionError("NETWORK_FAILED", "Could not reach the AI provider.", true);
+    throw new ExtensionError("NETWORK_FAILED", "无法连接 AI 服务商。", true);
   }
 
   if (!response.ok) {
@@ -149,7 +149,7 @@ export async function streamChatCompletion({
     throw responseError(response.status);
   }
   if (!response.body) {
-    throw new ExtensionError("PROTOCOL_FAILED", "The AI provider returned no streaming response body.", true);
+    throw new ExtensionError("PROTOCOL_FAILED", "AI 服务商未返回流式响应内容。", true);
   }
 
   const decoder = new TextDecoder();
@@ -165,7 +165,7 @@ export async function streamChatCompletion({
         result = await reader.read();
       } catch (error) {
         if (signal.aborted) throw error;
-        throw new ExtensionError("NETWORK_FAILED", "The AI provider stream was interrupted.", true);
+        throw new ExtensionError("NETWORK_FAILED", "AI 服务商的流式响应已中断。", true);
       }
 
       if (result.value) buffer += decoder.decode(result.value, { stream: true });

@@ -36,26 +36,26 @@ export class ChatService {
 
   private async sendOnce(payload: SendPayload, signal: AbortSignal, onEvent: (event: ChatServiceEvent) => void): Promise<SideChatRecord> {
     let settings: InternalSettings;
-    try { settings = await this.dependencies.loadSettings(); } catch { throw new ExtensionError("STORAGE_FAILED", "The extension could not load its settings."); }
+    try { settings = await this.dependencies.loadSettings(); } catch { throw new ExtensionError("STORAGE_FAILED", "扩展无法加载设置。"); }
     if (!settings.privacyAccepted || !settings.config) {
-      throw new ExtensionError("PERMISSION_REQUIRED", "Accept the privacy notice and configure a provider before sending a question.");
+      throw new ExtensionError("PERMISSION_REQUIRED", "请先同意使用说明并配置模型服务商，再发送问题。");
     }
-    if (!settings.apiKey) throw new ExtensionError("KEY_REQUIRED", "Set an API key before sending a question.");
+    if (!settings.apiKey) throw new ExtensionError("KEY_REQUIRED", "请先设置 API 密钥再发送问题。");
     let hasHostPermission = false;
     try { hasHostPermission = await this.dependencies.hasHostPermission(settings.config.baseUrl); } catch { /* treat unreadable permission state as missing */ }
     if (!hasHostPermission) {
-      throw new ExtensionError("PERMISSION_REQUIRED", "The configured endpoint permission is missing. Open extension settings and grant access again.");
+      throw new ExtensionError("PERMISSION_REQUIRED", "缺少接口访问权限，请打开扩展设置重新授权。");
     }
     const configuredSettings = { ...settings, config: settings.config, apiKey: settings.apiKey };
     if (payload.attachments.some((attachment) => attachment.kind === "image") && !settings.config.supportsImages) {
-      throw new ExtensionError("ATTACHMENT_FAILED", "The configured provider does not support image attachments.");
+      throw new ExtensionError("ATTACHMENT_FAILED", "当前配置的模型不支持图片附件。");
     }
 
     let existing: SideChatRecord;
     try {
       existing = await this.dependencies.history.get(payload.conversationId) ?? emptyRecord(payload.conversationId);
     } catch {
-      throw new ExtensionError("STORAGE_FAILED", "The extension could not read side-chat history.");
+      throw new ExtensionError("STORAGE_FAILED", "扩展无法读取侧边对话记录。");
     }
     const retry = findRetry(existing, payload);
     const priorMessages = retry ? existing.messages.slice(0, retry.userIndex) : existing.messages;
@@ -90,7 +90,7 @@ export class ChatService {
         onEvent({ type: "delta", text: result });
       }
       if (!assistant.content.trim()) {
-        throw new ExtensionError("PROTOCOL_FAILED", "The AI provider returned an empty completion.", true);
+        throw new ExtensionError("PROTOCOL_FAILED", "AI 服务商返回了空回复。", true);
       }
       assistant.status = "complete";
       completed = true;
@@ -104,7 +104,7 @@ export class ChatService {
       try {
         await this.dependencies.history.put(existing);
       } catch {
-        throw new ExtensionError("STORAGE_FAILED", "The extension could not save side-chat history.");
+        throw new ExtensionError("STORAGE_FAILED", "扩展无法保存侧边对话记录。");
       }
     }
     if (!completed) throw new Error("Unreachable");
@@ -119,7 +119,7 @@ export class ChatService {
     const tokenBudget = Math.floor(settings.config.contextWindowTokens * 0.35);
     const contentBudget = tokenBudget - estimateTokens(JSON.stringify(compressionMessages(""))) - 1;
     if (!Number.isFinite(contentBudget) || contentBudget <= 0) {
-      throw new ExtensionError("PROTOCOL_FAILED", "The provider context window cannot support context compression.");
+      throw new ExtensionError("PROTOCOL_FAILED", "当前模型上下文窗口不足以完成上下文压缩。");
     }
     const values = payload.mainMessages
       .map((message) => JSON.stringify(message))
@@ -136,7 +136,7 @@ export class ChatService {
       });
       const summary = fromDeltas || result;
       if (!summary.trim()) {
-        throw new ExtensionError("PROTOCOL_FAILED", "The provider returned an empty context compression result.", true);
+        throw new ExtensionError("PROTOCOL_FAILED", "模型返回了空的上下文压缩结果。", true);
       }
       summaries.push(summary);
     }
@@ -191,7 +191,7 @@ function splitForProviderCompression(value: string, tokenBudget: number): string
     const characterUnits = quarterUnits(JSON.stringify(character)) - 2;
     if (used + characterUnits > limit) {
       if (!segment) {
-        throw new ExtensionError("PROTOCOL_FAILED", "The provider context window cannot support context compression.");
+        throw new ExtensionError("PROTOCOL_FAILED", "当前模型上下文窗口不足以完成上下文压缩。");
       }
       segments.push(segment);
       segment = character;
@@ -203,7 +203,7 @@ function splitForProviderCompression(value: string, tokenBudget: number): string
   }
   if (segment) segments.push(segment);
   if (segments.some((part) => estimateTokens(JSON.stringify(compressionMessages(part))) > tokenBudget)) {
-    throw new ExtensionError("PROTOCOL_FAILED", "The provider context window cannot support context compression.");
+    throw new ExtensionError("PROTOCOL_FAILED", "当前模型上下文窗口不足以完成上下文压缩。");
   }
   return segments;
 }
