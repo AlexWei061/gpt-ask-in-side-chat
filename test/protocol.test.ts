@@ -75,7 +75,7 @@ describe("send payload guard", () => {
 
 describe("copy", () => {
   it("provides the composer placeholder", () => {
-    expect(t("composerPlaceholder", "en-US")).toBe("Ask about this selection…");
-    expect(t("composerPlaceholder", "zh-CN")).toBe("针对这段内容提问…");
+    expect(t("composerPlaceholder", "en-US")).toBe("针对所选内容提问……");
+    expect(t("composerPlaceholder", "zh-CN")).toBe("针对所选内容提问……");
   });
 });

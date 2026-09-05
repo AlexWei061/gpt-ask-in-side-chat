@@ -37,12 +37,31 @@ describe("side panel", () => {
     panel.destroy();
   });
 
+  it("uses Chinese ChatGPT-style message and composer structure", () => {
+    const panel = new SidePanel(document, { onSend: vi.fn() });
+    panel.setConversation("c", [
+      { id: "u", role: "user", content: "什么是鞅？", status: "complete", createdAt: "" },
+      { id: "a", role: "assistant", content: "公平的动态预测。", status: "complete", createdAt: "" },
+    ]);
+    panel.open(quote, { capturedMessages: 5, endpointOrigin: "https://api.deepseek.com", model: "deepseek-v4-flash", contextWindowTokens: 1_000_000 });
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    expect(root.textContent).toContain("侧边对话");
+    expect(root.textContent).toContain("已读取 5 条消息");
+    expect(root.querySelector(".message.user > .message-content")).toBeTruthy();
+    expect(root.querySelector(".message.assistant > .message-content")).toBeTruthy();
+    expect(root.querySelector(".composer")).toBeTruthy();
+    expect(root.querySelector("textarea")?.getAttribute("placeholder")).toBe("针对所选内容提问……");
+    expect(root.querySelector("[data-action=send]")?.getAttribute("aria-label")).toBe("发送");
+    expect(root.textContent).not.toMatch(/Side chat|Clear|Close|Send|Generating|Incomplete/);
+    panel.destroy();
+  });
+
   it("shows the captured boundary, destination, model, limit, and accepted token estimate", () => {
     const panel = new SidePanel(document, { onSend: vi.fn() });
     panel.setConversation("conversation", []);
     panel.open(quote, { capturedMessages: 7, endpointOrigin: "https://api.example.com", model: "model-a", contextWindowTokens: 128000 });
     let text = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!.textContent ?? "";
-    expect(text).toContain("7 captured messages"); expect(text).toContain("https://api.example.com"); expect(text).toContain("model-a"); expect(text).toContain("128,000");
+    expect(text).toContain("已读取 7 条消息"); expect(text).toContain("https://api.example.com"); expect(text).toContain("model-a"); expect(text).toContain("128,000");
     panel.setAccepted(2345);
     text = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!.textContent ?? "";
     expect(text).toContain("2,345");
@@ -54,7 +73,7 @@ describe("side panel", () => {
     panel.setConversation("conversation", []); panel.open(quote);
     panel.setExtractionError(2, true);
     const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
-    expect(root.textContent).toContain("2 messages"); expect(root.querySelector("[data-action=copy-diagnostics]")).toBeTruthy();
+    expect(root.textContent).toContain("2 条消息"); expect(root.querySelector("[data-action=copy-diagnostics]")).toBeTruthy();
     expect(root.textContent).not.toContain("selected words");
     panel.destroy();
   });
@@ -167,7 +186,7 @@ describe("side panel", () => {
     const panel = new SidePanel(document, { onSend: vi.fn() });
     panel.setConversation("c", messages); panel.open(quote);
     const host = document.querySelector<HTMLElement>("[data-side-chat-host]")!;
-    expect(host.shadowRoot!.textContent).toContain("Incomplete");
+    expect(host.shadowRoot!.textContent).toContain("未完成");
     expect(document.body.style.marginRight).toBe("420px");
     host.shadowRoot!.querySelector<HTMLButtonElement>("[data-action=close]")!.click();
     expect(host.style.display).toBe("none");
@@ -236,7 +255,7 @@ describe("side panel", () => {
     const input = dialog.querySelector<HTMLInputElement>("input[type=file]")!;
     Object.defineProperty(input, "files", { configurable: true, value: [new File(["one"], "one.txt")] });
     dialog.querySelector<HTMLButtonElement>("[data-action=reselect-files]")!.click();
-    expect(dialog.textContent).toContain("Select exactly 2 files");
+    expect(dialog.textContent).toContain("请选择 2 个文件");
     dialog.querySelector<HTMLButtonElement>("[data-action=continue-without-files]")!.click();
     await expect(pending).resolves.toBeNull();
     panel.destroy();
