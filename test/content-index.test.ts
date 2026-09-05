@@ -53,7 +53,7 @@ describe("content bootstrap", () => {
     Object.defineProperty(globalThis, "chrome", { configurable: true, value: { runtime: {
       sendMessage: (message: { type: string; conversationId?: string }, callback: (response: unknown) => void) => {
         if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: privacy, config: null } });
-        else if (message.type === "ui:get") callback({ ok: true, value: { panelWidth: 420 } });
+        else if (message.type === "ui:get") callback({ ok: true, value: { windowGeometry: { width: 420, height: 560, right: 20, bottom: 20 } } });
         else if (message.type === "history:load") callback({ ok: true, value: historyRecords.get(message.conversationId!) ?? null });
         else callback({ ok: true });
       }, lastError: null, connect: () => { const port = new FakePort(); ports.push(port); return port; },
@@ -84,7 +84,7 @@ describe("content bootstrap", () => {
   it("settles safely for malformed UI and history values", async () => {
     privacy = true;
     (chrome.runtime.sendMessage as unknown as (message: { type: string }, callback: (response: unknown) => void) => void) = (message, callback) => {
-      if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: true, config: null } }); else if (message.type === "ui:get") callback({ ok: true, value: { panelWidth: "bad" } }); else if (message.type === "history:load") callback({ ok: true, value: { schemaVersion: 1, conversationId: "wrong", updatedAt: "", messages: [] } }); else callback({ ok: false, error: { code: "NETWORK_FAILED", message: "x", retryable: "bad" } });
+      if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: true, config: null } }); else if (message.type === "ui:get") callback({ ok: true, value: { windowGeometry: { width: "bad", height: 560, right: 20, bottom: 20 } } }); else if (message.type === "history:load") callback({ ok: true, value: { schemaVersion: 1, conversationId: "wrong", updatedAt: "", messages: [] } }); else callback({ ok: false, error: { code: "NETWORK_FAILED", message: "x", retryable: "bad" } });
     };
     window.history.pushState({}, "", "/c/value"); const { bootstrapPromise } = await import("../src/content/index"); await bootstrapPromise;
     expect(document.querySelector("[data-side-chat-host]")).toBeTruthy(); expect(document.querySelector("[data-side-chat-host]")?.shadowRoot?.textContent).not.toContain("wrong");
@@ -94,7 +94,30 @@ describe("content bootstrap", () => {
     privacy = true; historyRecords.set("one", { schemaVersion: 1, conversationId: "one", updatedAt: "", messages: [{ id: "m", role: "assistant", content: "saved", status: "complete", createdAt: "" }] });
     window.history.pushState({}, "", "/c/one");
     const { bootstrapPromise } = await import("../src/content/index"); await bootstrapPromise;
-    expect(document.querySelector("[data-side-chat-host]")?.shadowRoot?.textContent).toContain("saved");
+    const host = document.querySelector<HTMLElement>("[data-side-chat-host]")!;
+    expect(host.shadowRoot?.querySelector("[data-minimized-bar]")).toBeTruthy();
+    expect(host.shadowRoot?.textContent).not.toContain("saved");
+    host.shadowRoot?.querySelector<HTMLButtonElement>("[data-minimized-bar]")?.click();
+    expect(host.shadowRoot?.textContent).toContain("saved");
+  });
+
+  it("persists the final floating-window geometry after resizing", async () => {
+    privacy = true; window.history.pushState({}, "", "/c/geometry"); installSelectableMessage();
+    const sent: unknown[] = [];
+    (chrome.runtime.sendMessage as unknown as (message: { type: string; conversationId?: string }, callback: (response: unknown) => void) => void) = (message, callback) => {
+      sent.push(message);
+      if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: true, config: null } });
+      else if (message.type === "ui:get") callback({ ok: true, value: { windowGeometry: { width: 420, height: 560, right: 20, bottom: 20 } } });
+      else if (message.type === "history:load") callback({ ok: true, value: null });
+      else callback({ ok: true });
+    };
+    const { bootstrapPromise } = await import("../src/content/index"); await bootstrapPromise;
+    const root = openAndSubmit("geometry question");
+    const handle = root.querySelector<HTMLElement>("[data-resize-handle]")!;
+    handle.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: 100, clientY: 100 }));
+    document.dispatchEvent(new PointerEvent("pointermove", { clientX: 84, clientY: 84 }));
+    document.dispatchEvent(new PointerEvent("pointerup", { clientX: 84, clientY: 84 }));
+    expect(sent).toContainEqual({ type: "ui:set-geometry", geometry: { width: 404, height: 544, right: 36, bottom: 36 } });
   });
 
   it("renders a valid terminal record from the real form port", async () => {
@@ -181,7 +204,8 @@ describe("content bootstrap", () => {
     window.history.pushState({}, "", "/c/attachment-new"); document.documentElement.append(document.createElement("i"));
     await Promise.resolve(); await Promise.resolve();
     resolveFetch(new Response(new Blob(["late"], { type: "text/plain" }), { status: 200 }));
-    await vi.waitFor(() => expect(root.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true));
+    await vi.waitFor(() => expect(document.querySelector<HTMLElement>("[data-side-chat-host]")?.style.display).toBe("none"));
+    expect(root.querySelector("textarea")).toBeNull();
     expect(ports).toHaveLength(0);
   });
 
@@ -202,7 +226,7 @@ describe("content bootstrap", () => {
     privacy = true; window.history.pushState({}, "", "/c/clear");
     let clearCompleted = false;
     (chrome.runtime.sendMessage as unknown as (message: { type: string; conversationId?: string }, callback: (response: unknown) => void) => void) = (message, callback) => {
-      if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: true, config: null } }); else if (message.type === "ui:get") callback({ ok: true, value: { panelWidth: 420 } }); else if (message.type === "history:load") callback({ ok: true, value: null }); else if (message.type === "history:clear") { clearCompleted = true; callback({ ok: true }); } else callback({ ok: true });
+      if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: true, config: null } }); else if (message.type === "ui:get") callback({ ok: true, value: { windowGeometry: { width: 420, height: 560, right: 20, bottom: 20 } } }); else if (message.type === "history:load") callback({ ok: true, value: null }); else if (message.type === "history:clear") { clearCompleted = true; callback({ ok: true }); } else callback({ ok: true });
     };
     document.body.innerHTML = `<main><article data-message-author-role="assistant"><p id="quote">alpha</p></article></main>`; vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => { callback(0); return 1; }); Object.defineProperty(window, "confirm", { configurable: true, value: () => true });
     const { bootstrapPromise } = await import("../src/content/index"); await bootstrapPromise;
@@ -218,15 +242,18 @@ describe("content bootstrap", () => {
     let oldCallback: ((response: unknown) => void) | undefined;
     (chrome.runtime.sendMessage as unknown as (message: { type: string; conversationId?: string }, callback: (response: unknown) => void) => void) = (message, callback) => {
       if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: true, config: null } });
-      else if (message.type === "ui:get") callback({ ok: true, value: { panelWidth: 420 } });
+      else if (message.type === "ui:get") callback({ ok: true, value: { windowGeometry: { width: 420, height: 560, right: 20, bottom: 20 } } });
       else if (message.type === "history:load" && message.conversationId === "old") oldCallback = callback;
       else if (message.type === "history:load") callback({ ok: true, value: { schemaVersion: 1, conversationId: "new", updatedAt: "", messages: [{ id: "new", role: "assistant", content: "NEW", status: "complete", createdAt: "" }] } }); else callback({ ok: true });
     };
     const { bootstrapPromise: boot } = await import("../src/content/index");
     window.history.pushState({}, "", "/c/new"); document.documentElement.append(document.createElement("i")); await Promise.resolve(); await Promise.resolve();
     oldCallback?.({ ok: true, value: { schemaVersion: 1, conversationId: "old", updatedAt: "", messages: [{ id: "stale", role: "assistant", content: "STALE", status: "complete", createdAt: "" }] } }); await boot;
-    expect(document.querySelector("[data-side-chat-host]")?.shadowRoot?.textContent).not.toContain("STALE");
-    expect(document.querySelector("[data-side-chat-host]")?.shadowRoot?.textContent).toContain("NEW");
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    expect(root.textContent).not.toContain("STALE");
+    expect(root.querySelector("[data-minimized-bar]")).toBeTruthy();
+    root.querySelector<HTMLButtonElement>("[data-minimized-bar]")!.click();
+    expect(root.textContent).toContain("NEW");
   });
 
   it("does not let a delayed same-conversation history load overwrite an active stream", async () => {
@@ -236,7 +263,7 @@ describe("content bootstrap", () => {
     let loadCallback: ((response: unknown) => void) | undefined;
     (chrome.runtime.sendMessage as unknown as (message: { type: string }, callback: (response: unknown) => void) => void) = (message, callback) => {
       if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: true, config: null } });
-      else if (message.type === "ui:get") callback({ ok: true, value: { panelWidth: 420 } });
+      else if (message.type === "ui:get") callback({ ok: true, value: { windowGeometry: { width: 420, height: 560, right: 20, bottom: 20 } } });
       else if (message.type === "history:load") loadCallback = callback;
       else callback({ ok: true });
     };
@@ -261,7 +288,7 @@ describe("content bootstrap", () => {
     let loadCallback: ((response: unknown) => void) | undefined;
     (chrome.runtime.sendMessage as unknown as (message: { type: string }, callback: (response: unknown) => void) => void) = (message, callback) => {
       if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: true, config: null } });
-      else if (message.type === "ui:get") callback({ ok: true, value: { panelWidth: 420 } });
+      else if (message.type === "ui:get") callback({ ok: true, value: { windowGeometry: { width: 420, height: 560, right: 20, bottom: 20 } } });
       else if (message.type === "history:load") loadCallback = callback;
       else callback({ ok: true });
     };
@@ -350,7 +377,9 @@ describe("content bootstrap", () => {
 
     historyRecords.set("cache", sideRecord("cache", "RESTORED"));
     window.dispatchEvent(transition("pageshow", true));
-    await vi.waitFor(() => expect(root.textContent).toContain("RESTORED"));
+    await vi.waitFor(() => expect(root.querySelector("[data-minimized-bar]")).toBeTruthy());
+    root.querySelector<HTMLButtonElement>("[data-minimized-bar]")!.click();
+    expect(root.textContent).toContain("RESTORED");
     window.dispatchEvent(transition("pagehide", false));
     expect(document.querySelector("[data-side-chat-host]")).toBeNull();
     await module.bootstrap();

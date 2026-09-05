@@ -29,11 +29,89 @@ describe("side panel", () => {
     panel.destroy();
   });
 
+  it("allows a follow-up without selecting text after restoring history", () => {
+    const onSend = vi.fn();
+    const panel = new SidePanel(document, { onSend });
+    panel.setConversation("c", []);
+    panel.setMessages(messages, true);
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    root.querySelector<HTMLButtonElement>("[data-action=restore]")!.click();
+    const input = root.querySelector<HTMLTextAreaElement>("textarea")!;
+    expect(input.disabled).toBe(false);
+    expect(root.querySelector<HTMLButtonElement>("[data-action=send]")!.disabled).toBe(true);
+    input.value = "  能再举个例子吗？  ";
+    input.dispatchEvent(new Event("input"));
+    expect(root.querySelector<HTMLButtonElement>("[data-action=send]")!.disabled).toBe(false);
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", cancelable: true }));
+    expect(onSend).toHaveBeenCalledWith({ question: "能再举个例子吗？", compressOldContext: false });
+    expect(root.querySelector("[data-pending-message] .quote")).toBeNull();
+    expect(root.querySelector<HTMLTextAreaElement>("textarea")!.disabled).toBe(true);
+    panel.destroy();
+  });
+
+  it("consumes a quote after completion and allows an unquoted follow-up and retry", () => {
+    const onSend = vi.fn();
+    const panel = new SidePanel(document, { onSend });
+    panel.setConversation("c", []); panel.open(quote);
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    const input = root.querySelector<HTMLTextAreaElement>("textarea")!;
+    input.value = "解释一下"; input.dispatchEvent(new Event("input"));
+    root.querySelector<HTMLFormElement>("form")!.requestSubmit();
+    panel.setAccepted();
+    panel.complete([
+      { id: "u", role: "user", content: "解释一下", quote, status: "complete", createdAt: "" },
+      ...messages,
+    ]);
+    expect(root.querySelector("[data-active-quote]")).toBeNull();
+    expect(root.querySelector(".message.user .quote")).not.toBeNull();
+    const followUp = root.querySelector<HTMLTextAreaElement>("textarea")!;
+    expect(followUp.disabled).toBe(false);
+    followUp.value = "继续解释"; followUp.dispatchEvent(new Event("input"));
+    root.querySelector<HTMLButtonElement>("[data-action=send]")!.click();
+    expect(onSend).toHaveBeenLastCalledWith({ question: "继续解释", compressOldContext: false });
+    panel.setError({ message: "连接中断", retryable: true });
+    root.querySelector<HTMLButtonElement>("[data-action=retry]")!.click();
+    expect(onSend).toHaveBeenLastCalledWith({ question: "继续解释", compressOldContext: false });
+    expect(onSend).toHaveBeenCalledTimes(3);
+    panel.destroy();
+  });
+
   it("loads the packaged KaTeX stylesheet inside the shadow root", () => {
     const panel = new SidePanel(document, { onSend: vi.fn() });
     const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
     expect(root.querySelector<HTMLLinkElement>('link[data-katex-style]')?.href)
       .toContain("katex/katex.min.css");
+    panel.destroy();
+  });
+
+  it("sends with Enter but leaves Shift+Enter and IME confirmation alone", () => {
+    const onSend = vi.fn(); const panel = new SidePanel(document, { onSend });
+    panel.setConversation("c", []); panel.open(quote);
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    const input = root.querySelector<HTMLTextAreaElement>("textarea")!;
+    input.value = "我的问题"; input.dispatchEvent(new Event("input"));
+    for (const modifiers of [{ shiftKey: true }, { isComposing: true }, { keyCode: 229 }]) {
+      const event = new KeyboardEvent("keydown", { key: "Enter", cancelable: true, ...modifiers });
+      input.dispatchEvent(event); expect(event.defaultPrevented).toBe(false);
+    }
+    expect(onSend).not.toHaveBeenCalled();
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", cancelable: true }));
+    expect(onSend).toHaveBeenCalledWith(expect.objectContaining({ question: "我的问题" }));
+    panel.destroy();
+  });
+
+  it("minimizes at the same top-left corner and animates both directions", () => {
+    const panel = new SidePanel(document, { onSend: vi.fn() });
+    panel.setConversation("c", []); panel.open(quote);
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    const expanded = root.querySelector<HTMLElement>(".panel")!;
+    const position = { left: expanded.style.left, top: expanded.style.top };
+    panel.minimize();
+    const bar = root.querySelector<HTMLElement>("[data-minimized-bar]")!;
+    expect({ left: bar.style.left, top: bar.style.top }).toEqual(position);
+    bar.click();
+    const restored = root.querySelector<HTMLElement>(".panel")!;
+    expect({ left: restored.style.left, top: restored.style.top }).toEqual(position);
     panel.destroy();
   });
 
@@ -64,6 +142,7 @@ describe("side panel", () => {
       { id: "u2", role: "user", content: "第二个问题", quote: { ...quote, text: "第二个引用" }, status: "complete", createdAt: "" },
       { id: "a2", role: "assistant", content: "第二个回答", status: "complete", createdAt: "" },
     ]);
+    panel.open(quote);
     const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
     const rendered = Array.from(root.querySelectorAll<HTMLElement>(".messages > .message"));
     expect(rendered.map((node) => node.textContent?.replace(/\s+/g, ""))).toEqual([
@@ -174,14 +253,30 @@ describe("side panel", () => {
     panel.destroy();
   });
 
-  it("stays open but clears ephemeral state when the conversation changes", () => {
+  it("hides on conversation change, then exposes loaded history as a minimized bar", () => {
     const panel = new SidePanel(document, { onSend: vi.fn() });
     panel.setConversation("one", messages); panel.open(quote); panel.setError({ message: "old error", retryable: true });
     panel.setConversation("two", []);
     const host = document.querySelector<HTMLElement>("[data-side-chat-host]")!;
+    expect(host.style.display).toBe("none");
+    panel.setMessages(messages, true);
     expect(host.style.display).toBe("");
-    expect(host.shadowRoot!.querySelector(".quote")).toBeNull();
-    expect(host.shadowRoot!.querySelector(".status")!.textContent).not.toContain("old error");
+    expect(host.shadowRoot!.querySelector("[data-minimized-bar]")?.textContent).toContain("侧边对话");
+    expect(host.shadowRoot!.querySelector(".panel")).toBeNull();
+    host.shadowRoot!.querySelector<HTMLButtonElement>("[data-minimized-bar]")!.click();
+    expect(host.shadowRoot!.querySelector(".panel")?.textContent).toContain("saved");
+    expect(host.shadowRoot!.textContent).not.toContain("old error");
+    panel.destroy();
+  });
+
+  it("does not hide a newly opened draft when history finishes loading", () => {
+    const panel = new SidePanel(document, { onSend: vi.fn() });
+    panel.setConversation("c", []); panel.open(quote);
+    panel.setMessages([], true);
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    expect(root.querySelector("textarea")).toBeTruthy();
+    panel.minimize(); panel.setMessages([], true);
+    expect(root.querySelector("[data-minimized-bar]")).toBeTruthy();
     panel.destroy();
   });
 
@@ -296,56 +391,145 @@ describe("side panel", () => {
     expect(raf).toHaveBeenCalledTimes(1); expect(document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!.querySelector("textarea")).toBe(textarea); frame?.(0); expect(document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!.textContent).toContain("AB"); panel.destroy();
   });
 
-  it("shows incomplete history and restores the original body margin when closed", () => {
+  it("minimizes without changing the page margin, then restores the same window state", () => {
     document.body.style.marginRight = "17px";
     const panel = new SidePanel(document, { onSend: vi.fn() });
     panel.setConversation("c", messages); panel.open(quote);
     const host = document.querySelector<HTMLElement>("[data-side-chat-host]")!;
+    const draft = host.shadowRoot!.querySelector<HTMLTextAreaElement>("textarea")!; draft.value = "保留草稿"; draft.dispatchEvent(new Event("input"));
     expect(host.shadowRoot!.textContent).toContain("未完成");
-    expect(document.body.style.marginRight).toBe("420px");
-    host.shadowRoot!.querySelector<HTMLButtonElement>("[data-action=close]")!.click();
-    expect(host.style.display).toBe("none");
     expect(document.body.style.marginRight).toBe("17px");
+    host.shadowRoot!.querySelector<HTMLButtonElement>("[data-action=minimize]")!.click();
+    expect(host.style.display).toBe("");
+    expect(host.shadowRoot!.querySelector(".panel")).toBeNull();
+    expect(host.shadowRoot!.querySelector("[data-minimized-bar]")).toBeTruthy();
+    expect(document.body.style.marginRight).toBe("17px");
+    host.shadowRoot!.querySelector<HTMLButtonElement>("[data-minimized-bar]")!.click();
+    expect(host.shadowRoot!.textContent).toContain("未完成");
+    expect(host.shadowRoot!.textContent).toContain("selected words");
+    expect(host.shadowRoot!.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("保留草稿");
     panel.destroy();
   });
 
-  it("restores absent and important inline margins exactly", () => {
-    const panel = new SidePanel(document, { onSend: vi.fn() }); panel.setConversation("c", []); panel.open(quote); expect(document.body.style.getPropertyPriority("margin-right")).toBe("important"); panel.close(); expect(document.body.style.getPropertyValue("margin-right")).toBe("");
-    document.body.style.setProperty("margin-right", "17px", "important"); panel.open(quote); panel.close(); expect(document.body.style.getPropertyValue("margin-right")).toBe("17px"); expect(document.body.style.getPropertyPriority("margin-right")).toBe("important"); panel.destroy();
+  it("does not mutate an absent or important page margin", () => {
+    const panel = new SidePanel(document, { onSend: vi.fn() }); panel.setConversation("c", []); panel.open(quote); expect(document.body.style.getPropertyValue("margin-right")).toBe("");
+    panel.minimize(); document.body.style.setProperty("margin-right", "17px", "important"); panel.open(quote); panel.minimize(); expect(document.body.style.getPropertyValue("margin-right")).toBe("17px"); expect(document.body.style.getPropertyPriority("margin-right")).toBe("important"); panel.destroy();
   });
 
-  it("resizes once on pointerup and cleans pointer listeners on destroy", () => {
-    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1200 });
-    const onResize = vi.fn(); const panel = new SidePanel(document, { onSend: vi.fn(), onResize });
+  it("resizes from the bottom-right while preserving the top-left corner", () => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1200 }); Object.defineProperty(window, "innerHeight", { configurable: true, value: 900 });
+    const onGeometryChange = vi.fn(); const panel = new SidePanel(document, { onSend: vi.fn(), onGeometryChange });
+    panel.setGeometry({ width: 420, height: 560, right: 40, bottom: 30 });
     panel.setConversation("c", []); panel.open(quote);
     const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
-    root.querySelector<HTMLElement>("[data-resize-handle]")!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: 780 }));
-    document.dispatchEvent(new PointerEvent("pointermove", { clientX: 700 }));
-    document.dispatchEvent(new PointerEvent("pointerup", { clientX: 700 }));
-    expect(onResize).toHaveBeenCalledTimes(1);
+    root.querySelector<HTMLElement>("[data-resize-handle]")!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: 100, clientY: 100 }));
+    document.dispatchEvent(new PointerEvent("pointermove", { clientX: 50, clientY: 60 }));
+    document.dispatchEvent(new PointerEvent("pointerup", { clientX: 50, clientY: 60 }));
+    expect(onGeometryChange).toHaveBeenCalledTimes(1);
+    expect(onGeometryChange).toHaveBeenCalledWith({ width: 370, height: 520, right: 90, bottom: 70 });
     panel.destroy();
-    document.dispatchEvent(new PointerEvent("pointermove", { clientX: 600 }));
-    expect(onResize).toHaveBeenCalledTimes(1);
+    document.dispatchEvent(new PointerEvent("pointermove", { clientX: 0, clientY: 0 }));
+    expect(onGeometryChange).toHaveBeenCalledTimes(1);
   });
 
-  it("reclamps on viewport shrink and ends a pointercancel drag once", () => {
-    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1800 }); const onResize = vi.fn(); const panel = new SidePanel(document, { onSend: vi.fn(), onResize }); panel.setWidth(900); panel.setConversation("c", []); panel.open(quote);
-    Object.defineProperty(window, "innerWidth", { configurable: true, value: 700 }); window.dispatchEvent(new Event("resize")); const handle = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!.querySelector<HTMLElement>("[data-resize-handle]")!; expect(handle.getAttribute("aria-valuenow")).toBe("350");
-    handle.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: 300 })); document.dispatchEvent(new PointerEvent("pointercancel")); document.dispatchEvent(new PointerEvent("pointermove", { clientX: 0 })); expect(onResize).toHaveBeenCalledTimes(1); panel.destroy();
+  it("reclamps the whole geometry on viewport shrink and ends pointercancel once", () => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1800 }); Object.defineProperty(window, "innerHeight", { configurable: true, value: 1200 }); const onGeometryChange = vi.fn(); const panel = new SidePanel(document, { onSend: vi.fn(), onGeometryChange }); panel.setGeometry({ width: 900, height: 900, right: 200, bottom: 150 }); panel.setConversation("c", []); panel.open(quote);
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 700 }); Object.defineProperty(window, "innerHeight", { configurable: true, value: 600 }); window.dispatchEvent(new Event("resize")); const handle = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!.querySelector<HTMLElement>("[data-resize-handle]")!; expect(handle.getAttribute("aria-valuenow")).toBe("676"); expect(handle.getAttribute("aria-valuetext")).toContain("576");
+    handle.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: 300, clientY: 100 })); document.dispatchEvent(new PointerEvent("pointercancel")); document.dispatchEvent(new PointerEvent("pointermove", { clientX: 0, clientY: 0 })); expect(onGeometryChange).toHaveBeenCalledTimes(1); panel.destroy();
   });
 
-  it("resizes with keyboard-accessible separator controls", () => {
-    const onResize = vi.fn(); const panel = new SidePanel(document, { onSend: vi.fn(), onResize });
+  it("resizes width and height with keyboard-accessible separator controls", () => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1200 }); Object.defineProperty(window, "innerHeight", { configurable: true, value: 900 });
+    const onGeometryChange = vi.fn(); const panel = new SidePanel(document, { onSend: vi.fn(), onGeometryChange });
     panel.setConversation("c", []); panel.open(quote);
     const handle = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!.querySelector<HTMLElement>("[data-resize-handle]")!;
     expect(handle.getAttribute("role")).toBe("separator");
     expect(handle.tabIndex).toBe(0);
     handle.focus(); const initial = handle.getAttribute("aria-valuenow");
     handle.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
-    handle.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    handle.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
     expect(document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!.activeElement).toBe(handle);
     expect(handle.getAttribute("aria-valuenow")).not.toBe(initial);
-    expect(onResize).toHaveBeenCalledTimes(2);
+    expect(handle.getAttribute("aria-valuetext")).toContain("544");
+    expect(onGeometryChange).toHaveBeenCalledTimes(2);
+    panel.destroy();
+  });
+
+  it("drags the floating window by its title bar and persists the final position", () => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1200 }); Object.defineProperty(window, "innerHeight", { configurable: true, value: 900 });
+    const onGeometryChange = vi.fn(); const panel = new SidePanel(document, { onSend: vi.fn(), onGeometryChange }); panel.setGeometry({ width: 420, height: 560, right: 100, bottom: 80 }); panel.setConversation("c", []); panel.open(quote);
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    root.querySelector<HTMLElement>("[data-drag-handle]")!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: 100, clientY: 100 }));
+    document.dispatchEvent(new PointerEvent("pointermove", { clientX: 140, clientY: 130 }));
+    document.dispatchEvent(new PointerEvent("pointerup", { clientX: 140, clientY: 130 }));
+    expect(onGeometryChange).toHaveBeenCalledWith({ width: 420, height: 560, right: 60, bottom: 50 });
+    const floating = root.querySelector<HTMLElement>(".panel")!;
+    expect(floating.style.getPropertyValue("--side-chat-right")).toBe("60px");
+    expect(floating.style.getPropertyValue("--side-chat-bottom")).toBe("50px");
+    panel.destroy();
+  });
+
+  it("drags the minimized bar without restoring, then restores on a fresh click", () => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1200 }); Object.defineProperty(window, "innerHeight", { configurable: true, value: 900 });
+    const onGeometryChange = vi.fn(); const panel = new SidePanel(document, { onSend: vi.fn(), onGeometryChange });
+    panel.setGeometry({ width: 420, height: 560, right: 100, bottom: 80 }); panel.open(quote); panel.minimize();
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    const bar = root.querySelector<HTMLElement>("[data-minimized-bar]")!;
+    bar.firstElementChild!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: 700, clientY: 280 }));
+    document.dispatchEvent(new PointerEvent("pointermove", { clientX: 740, clientY: 310 }));
+    document.dispatchEvent(new PointerEvent("pointerup"));
+    bar.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+    expect(root.querySelector(".panel")).toBeNull();
+    expect(bar.style.left).toBe("720px"); expect(bar.style.top).toBe("290px");
+    expect(onGeometryChange).toHaveBeenCalledWith({ width: 420, height: 560, right: 60, bottom: 50 });
+    bar.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: 740, clientY: 310 }));
+    document.dispatchEvent(new PointerEvent("pointerup"));
+    bar.click();
+    expect(root.querySelector<HTMLElement>(".panel")!.style.left).toBe("720px");
+    panel.destroy();
+  });
+
+  it("uses the bar dimensions at viewport edges and clamps the expanded window on restore", () => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1200 }); Object.defineProperty(window, "innerHeight", { configurable: true, value: 900 });
+    const panel = new SidePanel(document, { onSend: vi.fn() }); panel.open(quote); panel.minimize();
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    const bar = root.querySelector<HTMLElement>("[data-minimized-bar]")!;
+    bar.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: 100, clientY: 100 }));
+    document.dispatchEvent(new PointerEvent("pointermove", { clientX: 2000, clientY: 2000 }));
+    document.dispatchEvent(new PointerEvent("pointerup"));
+    expect(bar.style.left).toBe("1008px"); expect(bar.style.top).toBe("844px");
+    window.dispatchEvent(new Event("resize"));
+    expect(bar.style.left).toBe("1008px"); expect(bar.style.top).toBe("844px");
+    bar.click();
+    const expanded = root.querySelector<HTMLElement>(".panel")!;
+    expect(expanded.style.left).toBe("768px"); expect(expanded.style.top).toBe("328px");
+    panel.destroy();
+  });
+
+  it("opens embedded settings and returns to the unchanged conversation", () => {
+    vi.spyOn(HTMLIFrameElement.prototype, "src", "set").mockImplementation(function (this: HTMLIFrameElement, value: string) { this.dataset.testSrc = value; });
+    const onSettingsClose = vi.fn();
+    const panel = new SidePanel(document, { onSend: vi.fn(), onSettingsClose }); panel.open(quote);
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    root.querySelector<HTMLButtonElement>("[data-action=settings]")!.click();
+    expect(root.querySelector("iframe")?.dataset.testSrc).toContain("options.html?embedded=1");
+    root.querySelector<HTMLButtonElement>("[data-action=settings]")!.click();
+    expect(root.querySelector("iframe")).toBeNull();
+    expect(root.querySelector("[data-active-quote]")?.textContent).toContain(quote.text);
+    expect(onSettingsClose).toHaveBeenCalledOnce(); panel.destroy();
+  });
+
+  it("keeps generation running while minimized and updates the bar when complete", () => {
+    const panel = new SidePanel(document, { onSend: vi.fn() }); panel.setConversation("c", []); panel.open(quote); panel.setBusy(true); panel.appendDelta("局部回答"); panel.minimize();
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    expect(root.querySelector("[data-minimized-bar]")?.textContent).toContain("正在生成…");
+    root.querySelector<HTMLButtonElement>("[data-minimized-bar]")!.click();
+    expect(root.querySelector(".panel")?.textContent).toContain("局部回答");
+    panel.minimize();
+    panel.complete(messages);
+    expect(root.querySelector("[data-minimized-bar]")?.textContent).toContain("侧边对话");
+    root.querySelector<HTMLButtonElement>("[data-minimized-bar]")!.click();
+    expect(root.querySelector(".panel")?.textContent).toContain("saved");
     panel.destroy();
   });
 
@@ -354,11 +538,11 @@ describe("side panel", () => {
     panel.setConversation("one", messages); panel.open(quote);
     panel.setError({ message: "old", retryable: true });
     panel.setConversation(null, []);
-    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    const host = document.querySelector<HTMLElement>("[data-side-chat-host]")!; const root = host.shadowRoot!;
+    expect(host.style.display).toBe("none");
     expect(root.textContent).not.toContain("saved");
-    expect(root.querySelector(".status")!.textContent).not.toContain("old");
-    root.querySelector<HTMLFormElement>("form")!.requestSubmit();
-    expect(root.querySelector<HTMLTextAreaElement>("textarea")!.disabled).toBe(true);
+    expect(root.querySelector(".status")).toBeNull();
+    expect(root.querySelector("form")).toBeNull();
     panel.destroy();
   });
 

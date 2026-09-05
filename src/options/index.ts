@@ -9,6 +9,7 @@ import { permissionPattern } from "../background/permissions";
 type PublicSettings = { config: ProviderConfig | null; privacyAccepted: boolean; hasSessionKey: boolean };
 
 document.head.append(Object.assign(document.createElement("style"), { textContent: styles }));
+if (new URLSearchParams(location.search).get("embedded") === "1") document.documentElement.classList.add("embedded");
 const appElement = document.querySelector<HTMLElement>("#app");
 if (!appElement) throw new Error("无法初始化设置页。");
 const app = appElement;

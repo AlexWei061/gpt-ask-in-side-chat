@@ -1,11 +1,13 @@
-import type { ProviderConfig } from "../shared/types";
+import type { ProviderConfig, WindowGeometry } from "../shared/types";
 import { normalizeBaseUrl } from "./permissions";
 
 const CONFIG_KEY = "provider-config";
 const PRIVACY_KEY = "privacy-accepted";
 const API_KEY = "provider-api-key";
 const PANEL_WIDTH_KEY = "panel-width";
+const WINDOW_GEOMETRY_KEY = "window-geometry";
 const MAX_CONTEXT_WINDOW_TOKENS = 10_000_000;
+const DEFAULT_WINDOW_GEOMETRY: WindowGeometry = { width: 420, height: 560, right: 20, bottom: 20 };
 
 type SessionKey = {
   apiKey: string;
@@ -125,17 +127,28 @@ export async function forgetSessionKey(): Promise<void> {
   await chrome.storage.session.remove(API_KEY);
 }
 
-export function clampPanelWidth(width: number): number {
-  if (!Number.isFinite(width)) return 420;
-  return Math.max(320, Math.min(960, Math.round(width)));
+function normalizedNumber(value: unknown, fallback: number, minimum: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(minimum, Math.min(4096, Math.round(value)))
+    : fallback;
 }
 
-export async function loadUiPreferences(): Promise<{ panelWidth: number }> {
-  const stored = await chrome.storage.local.get(PANEL_WIDTH_KEY);
-  const width = stored[PANEL_WIDTH_KEY];
-  return { panelWidth: clampPanelWidth(typeof width === "number" ? width : 420) };
+export function normalizeWindowGeometry(value: unknown, legacyWidth?: unknown): WindowGeometry {
+  const geometry = value && typeof value === "object" ? value as Partial<Record<keyof WindowGeometry, unknown>> : {};
+  const fallbackWidth = normalizedNumber(legacyWidth, DEFAULT_WINDOW_GEOMETRY.width, 340);
+  return {
+    width: normalizedNumber(geometry.width, fallbackWidth, 340),
+    height: normalizedNumber(geometry.height, DEFAULT_WINDOW_GEOMETRY.height, 360),
+    right: normalizedNumber(geometry.right, DEFAULT_WINDOW_GEOMETRY.right, 12),
+    bottom: normalizedNumber(geometry.bottom, DEFAULT_WINDOW_GEOMETRY.bottom, 12),
+  };
 }
 
-export async function savePanelWidth(width: number): Promise<void> {
-  await chrome.storage.local.set({ [PANEL_WIDTH_KEY]: clampPanelWidth(width) });
+export async function loadUiPreferences(): Promise<{ windowGeometry: WindowGeometry }> {
+  const stored = await chrome.storage.local.get([WINDOW_GEOMETRY_KEY, PANEL_WIDTH_KEY]);
+  return { windowGeometry: normalizeWindowGeometry(stored[WINDOW_GEOMETRY_KEY], stored[PANEL_WIDTH_KEY]) };
+}
+
+export async function saveWindowGeometry(geometry: WindowGeometry): Promise<void> {
+  await chrome.storage.local.set({ [WINDOW_GEOMETRY_KEY]: normalizeWindowGeometry(geometry) });
 }

@@ -155,7 +155,8 @@ function findRetry(record: SideChatRecord, payload: SendPayload): { user: SideMe
 }
 
 function sameQuote(left: SideMessage["quote"], right: SendPayload["quote"]): boolean {
-  return left?.text === right.text && left.sourceRole === right.sourceRole && left.sourceMessageIndex === right.sourceMessageIndex;
+  if (!left || !right) return left === right;
+  return left.text === right.text && left.sourceRole === right.sourceRole && left.sourceMessageIndex === right.sourceMessageIndex;
 }
 
 function splitForCompression(value: string, tokenBudget: number): string[] {

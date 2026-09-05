@@ -4,7 +4,7 @@ import type { MainMessage, PreparedAttachment, QuoteReference, SideMessage } fro
 export type BuildChatMessagesArgs = {
   mainMessages: MainMessage[];
   sideMessages: SideMessage[];
-  quote: QuoteReference;
+  quote?: QuoteReference;
   question: string;
   attachments: PreparedAttachment[];
   compressedSummary: string | null;
@@ -40,11 +40,11 @@ export function buildChatMessages({
     ];
   const messages: ChatCompletionMessage[] = [systemMessage, { role: "user", content }];
 
-  messages.push(...sideMessages.map(({ role, content: sideContent, status }) => ({
+  messages.push(...sideMessages.map(({ role, content: sideContent, status, quote: sideQuote }) => ({
     role,
     content: role === "assistant" && status === "incomplete"
       ? `Partial side-chat response (incomplete):\n${sideContent}`
-      : sideContent,
+      : role === "user" && sideQuote ? JSON.stringify({ selectedQuote: sideQuote, question: sideContent }) : sideContent,
   })));
   messages.push({ role: "user", content: JSON.stringify({ selectedQuote: quote, question }) });
   return messages;

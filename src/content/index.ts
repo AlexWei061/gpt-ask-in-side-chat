@@ -1,5 +1,5 @@
 import { isProviderConfig, type RuntimeResponse, type StreamServerMessage } from "../shared/protocol";
-import type { ProviderConfig, SideChatRecord } from "../shared/types";
+import type { ProviderConfig, SideChatRecord, WindowGeometry } from "../shared/types";
 import type { ExtensionErrorCode } from "../shared/errors";
 import { ChatGptPageAdapter } from "./page-adapter";
 import { extractAttachmentDescriptors, prepareFile, type AttachmentDescriptor } from "./attachments";
@@ -7,7 +7,7 @@ import { SelectionController } from "./selection";
 import { SidePanel, type PanelContextSummary, type PanelSend } from "./ui/side-panel";
 
 type PublicSettings = { privacyAccepted: boolean; config: ProviderConfig | null };
-type UiPreferences = { panelWidth: number };
+type UiPreferences = { windowGeometry: WindowGeometry };
 
 function request<T>(message: unknown, valid: (value: unknown) => value is T = ((_: unknown): _ is T => true)): Promise<T> {
   return new Promise((resolve, reject) => chrome.runtime.sendMessage(message, (response: unknown) => {
@@ -28,12 +28,13 @@ export function bootstrap(): Promise<void> {
   return promise;
 }
 async function bootstrapImpl(): Promise<void> {
-  const publicSettings = await request<PublicSettings>({ type: "settings:get" }, isSettings);
+  let publicSettings = await request<PublicSettings>({ type: "settings:get" }, isSettings);
   if (!publicSettings.privacyAccepted) { delete (document as Document & { [BOOTSTRAP_KEY]?: Promise<void> })[BOOTSTRAP_KEY]; return; }
   const adapter = new ChatGptPageAdapter(document);
   let stream: { port: chrome.runtime.Port; requestId: string; conversationId: string } | null = null;
   let generation = 0;
   let disposed = false;
+  let settingsRefresh: Promise<void> | null = null;
   const disconnectStream = (abort = true) => {
     const active = stream;
     if (!active) return;
@@ -43,8 +44,14 @@ async function bootstrapImpl(): Promise<void> {
   };
   const panel = new SidePanel(document, {
     onSend: (submission) => { void start(submission); },
-    onResize: (width) => { void request({ type: "ui:set-width", width }).catch(() => panel.setNotice("无法保存侧栏宽度。")); },
+    onGeometryChange: (geometry) => { void request({ type: "ui:set-geometry", geometry }).catch(() => panel.setNotice("无法保存浮窗位置和大小。")); },
     onClear: () => clear(),
+    onSettingsClose: () => {
+      settingsRefresh = request<PublicSettings>({ type: "settings:get" }, isSettings).then((settings) => {
+        publicSettings = settings;
+        panel.setContextSummary(contextSummary(adapter.getMessageElements().length));
+      }).catch(() => panel.setNotice("无法刷新模型设置，请重试。"));
+    },
   });
   const contextSummary = (capturedMessages: number): PanelContextSummary => ({
     capturedMessages,
@@ -61,7 +68,7 @@ async function bootstrapImpl(): Promise<void> {
     if (!conversationId) return;
     try {
       const record = await request<SideChatRecord | null>({ type: "history:load", conversationId }, (value): value is SideChatRecord | null => value === null || (isSideChatRecord(value) && value.conversationId === conversationId));
-      if (!disposed && token === generation && adapter.getConversationId() === conversationId) panel.setMessages(record?.messages ?? []);
+      if (!disposed && token === generation && adapter.getConversationId() === conversationId) panel.setMessages(record?.messages ?? [], true);
     } catch { if (!disposed && token === generation) panel.setNotice("无法加载侧边对话记录。"); }
   }
   async function clear(): Promise<void> {
@@ -72,6 +79,8 @@ async function bootstrapImpl(): Promise<void> {
   }
   async function start(submission: PanelSend): Promise<void> {
     const token = ++generation;
+    if (settingsRefresh) { await settingsRefresh; settingsRefresh = null; }
+    if (disposed || token !== generation) return;
     const conversationId = adapter.getConversationId(); const elements = adapter.getMessageElements(); const extraction = adapter.extractConversation(elements);
     panel.setContextSummary(contextSummary(extraction.messages.length));
     if (!conversationId || !extraction.certain || extraction.messages.length === 0) { panel.setExtractionError(extraction.messages.length, Boolean(conversationId)); return; }
@@ -100,10 +109,10 @@ async function bootstrapImpl(): Promise<void> {
       else if (event.type === "error") { panel.setError({ message: event.error.message, retryable: event.error.retryable }); disconnectStream(false); }
     });
     port.onDisconnect.addListener(() => { if (stream?.port === port) { stream = null; panel.setError({ message: "侧边对话连接意外中断。", retryable: true }); } });
-    port.postMessage({ type: "start", requestId, payload: { conversationId, mainMessages: extraction.messages, quote: submission.quote, question: submission.question, attachments, compressOldContext: submission.compressOldContext } }); }
+    port.postMessage({ type: "start", requestId, payload: { conversationId, mainMessages: extraction.messages, ...submission, attachments } }); }
     catch { panel.setError({ message: "无法启动侧边对话请求。", retryable: true }); disconnectStream(false); }
   }
-  try { panel.setWidth((await request<UiPreferences>({ type: "ui:get" }, isUi)).panelWidth); } catch { panel.setError({ message: "无法加载侧栏偏好设置。", retryable: false }); }
+  try { panel.setGeometry((await request<UiPreferences>({ type: "ui:get" }, isUi)).windowGeometry); } catch { panel.setError({ message: "无法加载浮窗偏好设置。", retryable: false }); }
   let url = document.location.href;
   const checkNavigation = () => { if (document.location.href !== url) { url = document.location.href; void loadConversation(); } };
   const observer = new MutationObserver(checkNavigation); observer.observe(document.documentElement, { childList: true, subtree: true });
@@ -179,7 +188,13 @@ function isRuntimeError(value: unknown): value is { code: ExtensionErrorCode; me
 function isSettings(value: unknown): value is PublicSettings {
   return Boolean(value && typeof value === "object" && typeof (value as PublicSettings).privacyAccepted === "boolean" && (value as { config?: unknown }).config !== undefined && ((value as PublicSettings).config === null || isProviderConfig((value as PublicSettings).config)));
 }
-function isUi(value: unknown): value is UiPreferences { return Boolean(value && typeof value === "object" && typeof (value as UiPreferences).panelWidth === "number" && Number.isFinite((value as UiPreferences).panelWidth)); }
+function isUi(value: unknown): value is UiPreferences {
+  if (!value || typeof value !== "object") return false;
+  const geometry = (value as { windowGeometry?: unknown }).windowGeometry;
+  if (!geometry || typeof geometry !== "object") return false;
+  const parts = geometry as Partial<WindowGeometry>;
+  return [parts.width, parts.height, parts.right, parts.bottom].every((part) => typeof part === "number" && Number.isFinite(part));
+}
 function isQuote(value: unknown): boolean { return Boolean(value && typeof value === "object" && typeof (value as { text?: unknown }).text === "string" && ((value as { sourceRole?: unknown }).sourceRole === "user" || (value as { sourceRole?: unknown }).sourceRole === "assistant") && Number.isInteger((value as { sourceMessageIndex?: unknown }).sourceMessageIndex) && (value as { sourceMessageIndex: number }).sourceMessageIndex >= 0); }
 function isSideChatRecord(value: unknown): value is SideChatRecord {
   if (!value || typeof value !== "object") return false; const record = value as SideChatRecord;

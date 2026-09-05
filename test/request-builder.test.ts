@@ -21,6 +21,19 @@ function quotedPayload(content: string | ChatCompletionContentPart[]) {
 }
 
 describe("buildChatMessages", () => {
+  it("preserves earlier questions and quotes when following up without a new quote", () => {
+    const result = buildChatMessages({
+      mainMessages, question: "Can you give an example?", attachments: [], compressedSummary: null,
+      sideMessages: [
+        { id: "u", role: "user", content: "Explain this", quote, status: "complete", createdAt: "" },
+        sideMessages[0]!,
+      ],
+    });
+    expect(JSON.parse(result[2]!.content as string)).toEqual({ selectedQuote: quote, question: "Explain this" });
+    expect(result[3]!.content).toBe("Earlier answer");
+    expect(JSON.parse(result.at(-1)!.content as string)).toEqual({ question: "Can you give an example?" });
+  });
+
   it("uses system, main context, one assistant history message, and the current question", () => {
     const result = messages({ sideMessages: [sideMessages[0]!] });
 

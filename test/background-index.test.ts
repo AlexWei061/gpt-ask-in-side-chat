@@ -85,6 +85,20 @@ describe("background listeners", () => {
     await vi.waitFor(() => expect(response).toHaveBeenCalledWith({ ok: false, error: { code: "STORAGE_FAILED", message: "扩展无法完成请求。", retryable: false } }));
   });
 
+  it("loads legacy window width and persists normalized floating geometry", async () => {
+    localGet.mockResolvedValueOnce({ "panel-width": 650 });
+    const loadResponse = vi.fn();
+    message.listener?.({ type: "ui:get" }, {}, loadResponse);
+    await vi.waitFor(() => expect(loadResponse).toHaveBeenCalledWith({ ok: true, value: { windowGeometry: { width: 650, height: 560, right: 20, bottom: 20 } } }));
+
+    const localSet = globalThis.chrome.storage.local.set as ReturnType<typeof vi.fn>;
+    localSet.mockClear();
+    const saveResponse = vi.fn();
+    message.listener?.({ type: "ui:set-geometry", geometry: { width: 100, height: 200, right: 0, bottom: 0 } }, {}, saveResponse);
+    await vi.waitFor(() => expect(saveResponse).toHaveBeenCalledWith({ ok: true, value: { windowGeometry: { width: 340, height: 360, right: 12, bottom: 12 } } }));
+    expect(localSet).toHaveBeenCalledWith({ "window-geometry": { width: 340, height: 360, right: 12, bottom: 12 } });
+  });
+
   it("tests only the saved provider endpoint with the session-bound key", async () => {
     localGet.mockResolvedValueOnce({ "provider-config": { baseUrl: "https://api.example.com/v1", model: "model", contextWindowTokens: 4096, supportsImages: false }, "privacy-accepted": true });
     (globalThis.chrome.storage.session.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ "provider-api-key": { apiKey: "session-key", providerBaseUrl: "https://api.example.com/v1" } });

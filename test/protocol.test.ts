@@ -21,8 +21,11 @@ describe("runtime protocol guards", () => {
   });
   it("accepts bounded UI preferences only", () => {
     expect(isRuntimeRequest({ type: "ui:get" })).toBe(true);
-    expect(isRuntimeRequest({ type: "ui:set-width", width: 420 })).toBe(true);
-    expect(isRuntimeRequest({ type: "ui:set-width", width: 1200 })).toBe(false);
+    expect(isRuntimeRequest({ type: "ui:set-geometry", geometry: { width: 420, height: 560, right: 20, bottom: 20 } })).toBe(true);
+    expect(isRuntimeRequest({ type: "ui:set-geometry", geometry: { width: 420, height: 560, right: 20 } })).toBe(false);
+    expect(isRuntimeRequest({ type: "ui:set-geometry", geometry: { width: 420, height: 560, right: -1, bottom: 20 } })).toBe(false);
+    expect(isRuntimeRequest({ type: "ui:set-geometry", geometry: { width: 420, height: 560, right: 20, bottom: 20, extra: true } })).toBe(false);
+    expect(isRuntimeRequest({ type: "ui:set-width", width: 420 })).toBe(false);
   });
   it("accepts only exact zero-payload runtime requests", () => {
     for (const type of ["settings:get", "key:forget", "provider:test", "ui:get", "history:clear-all"]) {
@@ -53,6 +56,17 @@ function validPayload() {
 }
 
 describe("send payload guard", () => {
+  it("allows an omitted quote while still validating supplied quotes and context", () => {
+    const { quote, ...followUp } = validPayload();
+    expect(isSendPayload(followUp)).toBe(true);
+    expect(isStreamClientMessage({ type: "start", requestId: "follow-up", payload: followUp })).toBe(true);
+    expect(isSendPayload({ ...followUp, question: " " })).toBe(false);
+    expect(isSendPayload({ ...followUp, mainMessages: [] })).toBe(false);
+    for (const invalid of [null, {}, { ...quote, text: " " }, { ...quote, sourceMessageIndex: 9 }]) {
+      expect(isSendPayload({ ...followUp, quote: invalid })).toBe(false);
+    }
+  });
+
   it("requires validated nested request context and rejects extra client history", () => {
     expect(isSendPayload(validPayload())).toBe(true);
     expect(isSendPayload({ ...validPayload(), conversationId: "" })).toBe(false);

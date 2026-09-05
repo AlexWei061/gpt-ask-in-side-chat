@@ -7,6 +7,13 @@ export interface ProviderConfig {
   supportsImages: boolean;
 }
 
+export interface WindowGeometry {
+  width: number;
+  height: number;
+  right: number;
+  bottom: number;
+}
+
 export interface MainMessage {
   index: number;
   role: ChatRole;
@@ -43,7 +50,7 @@ export interface SideChatRecord {
 export interface SendPayload {
   conversationId: string;
   mainMessages: MainMessage[];
-  quote: QuoteReference;
+  quote?: QuoteReference;
   question: string;
   attachments: PreparedAttachment[];
   compressOldContext: boolean;

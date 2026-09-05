@@ -1,5 +1,5 @@
 import type { ExtensionErrorCode } from "./errors";
-import type { MainMessage, PreparedAttachment, ProviderConfig, QuoteReference, SendPayload, SideChatRecord } from "./types";
+import type { MainMessage, PreparedAttachment, ProviderConfig, QuoteReference, SendPayload, SideChatRecord, WindowGeometry } from "./types";
 
 export type RuntimeRequest =
   | { type: "settings:get" }
@@ -8,7 +8,7 @@ export type RuntimeRequest =
   | { type: "key:forget" }
   | { type: "provider:test" }
   | { type: "ui:get" }
-  | { type: "ui:set-width"; width: number }
+  | { type: "ui:set-geometry"; geometry: WindowGeometry }
   | { type: "history:load"; conversationId: string }
   | { type: "history:clear"; conversationId: string }
   | { type: "history:clear-all" };
@@ -40,11 +40,16 @@ export function isRuntimeRequest(value: unknown): value is RuntimeRequest {
   switch (value.type) {
     case "settings:get": case "key:forget": case "provider:test": case "ui:get": case "history:clear-all": return Object.keys(value).length === 1;
     case "key:set": return hasOnlyKeys(value, ["type", "apiKey"]) && isNonEmptyString(value.apiKey);
-    case "ui:set-width": return hasOnlyKeys(value, ["type", "width"]) && typeof value.width === "number" && Number.isFinite(value.width) && value.width >= 320 && value.width <= 960;
+    case "ui:set-geometry": return hasOnlyKeys(value, ["type", "geometry"]) && isWindowGeometry(value.geometry);
     case "history:load": case "history:clear": return hasOnlyKeys(value, ["type", "conversationId"]) && isNonEmptyString(value.conversationId);
     case "settings:save": return hasOnlyKeys(value, ["type", "config", "privacyAccepted"]) && isProviderConfig(value.config) && typeof value.privacyAccepted === "boolean";
     default: return false;
   }
+}
+
+function isWindowGeometry(value: unknown): value is WindowGeometry {
+  if (!isObject(value) || !hasOnlyKeys(value, ["width", "height", "right", "bottom"]) || Object.keys(value).length !== 4) return false;
+  return [value.width, value.height, value.right, value.bottom].every((part) => typeof part === "number" && Number.isFinite(part) && Number.isInteger(part) && part >= 0 && part <= 4096);
 }
 
 export function isStreamClientMessage(value: unknown): value is StreamClientMessage {
@@ -56,17 +61,15 @@ export function isSendPayload(value: unknown): value is SendPayload {
   if (!isObject(value) || !hasOnlyKeys(value, ["conversationId", "mainMessages", "quote", "question", "attachments", "compressOldContext"])) return false;
   if (!isNonEmptyString(value.conversationId)
     || !Array.isArray(value.mainMessages) || value.mainMessages.length === 0 || !value.mainMessages.every(isMainMessage)
-    || !isQuoteReference(value.quote)
+    || (value.quote !== undefined && !isQuoteReference(value.quote))
     || typeof value.question !== "string" || value.question.trim().length === 0
     || !Array.isArray(value.attachments) || !value.attachments.every(isPreparedAttachment)
     || typeof value.compressOldContext !== "boolean") return false;
   const mainMessages = value.mainMessages as MainMessage[];
-  const quote = value.quote as QuoteReference;
+  const quote = value.quote as QuoteReference | undefined;
   const attachments = value.attachments as PreparedAttachment[];
-  const quotedMessage = mainMessages[quote.sourceMessageIndex];
   return mainMessages.every((message, index) => message.index === index && message.content.trim().length > 0)
-    && quotedMessage?.role === quote.sourceRole
-    && quote.text.trim().length > 0
+    && (quote === undefined || (mainMessages[quote.sourceMessageIndex]?.role === quote.sourceRole && quote.text.trim().length > 0))
     && attachments.every((attachment) => attachment.sourceMessageIndex < mainMessages.length)
     ;
 }

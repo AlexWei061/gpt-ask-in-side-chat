@@ -29,7 +29,7 @@ Local side-chat history remains until you clear the current history, clear all h
 
 ## Your controls
 
-You can forget the session API key and clear all encrypted side-chat histories from the extension settings. You can clear one conversation's side-chat history from its docked panel. You may skip any attachment the extension cannot read.
+You can forget the session API key and clear all encrypted side-chat histories from the extension settings. You can clear one conversation's side-chat history from its floating window. You may skip any attachment the extension cannot read.
 
 For support or privacy requests, use the support contact published with the Chrome Web Store listing.
 

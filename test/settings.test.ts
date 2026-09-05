@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { chatCompletionsUrl, normalizeBaseUrl, permissionPattern } from "../src/background/permissions";
 import {
-  clampPanelWidth,
   forgetSessionKey,
   loadInternalSettings,
+  loadUiPreferences,
+  normalizeWindowGeometry,
   publicSettings,
   restrictStorageAccess,
   saveProviderConfig,
+  saveWindowGeometry,
   setSessionKey,
 } from "../src/background/settings";
 
@@ -84,12 +86,24 @@ describe("provider settings", () => {
     });
   });
 
-  it("keeps the docked panel width inside the supported range", () => {
-    expect(clampPanelWidth(100)).toBe(320);
-    expect(clampPanelWidth(420.4)).toBe(420);
-    expect(clampPanelWidth(1200)).toBe(960);
-    expect(clampPanelWidth(Number.NaN)).toBe(420);
-    expect(clampPanelWidth(Number.POSITIVE_INFINITY)).toBe(420);
+  it("normalizes floating-window geometry and strips malformed values", () => {
+    expect(normalizeWindowGeometry({ width: 500.4, height: 640.4, right: 32.4, bottom: 24.4 })).toEqual({ width: 500, height: 640, right: 32, bottom: 24 });
+    expect(normalizeWindowGeometry({ width: 100, height: Infinity, right: -1, bottom: "bad" })).toEqual({ width: 340, height: 560, right: 12, bottom: 20 });
+    expect(normalizeWindowGeometry(null)).toEqual({ width: 420, height: 560, right: 20, bottom: 20 });
+  });
+
+  it("loads saved geometry, or migrates the legacy panel width", async () => {
+    local.data["window-geometry"] = { width: 520, height: 610, right: 34, bottom: 28, ignored: true };
+    await expect(loadUiPreferences()).resolves.toEqual({ windowGeometry: { width: 520, height: 610, right: 34, bottom: 28 } });
+
+    delete local.data["window-geometry"];
+    local.data["panel-width"] = 700;
+    await expect(loadUiPreferences()).resolves.toEqual({ windowGeometry: { width: 700, height: 560, right: 20, bottom: 20 } });
+  });
+
+  it("saves one normalized global floating-window geometry", async () => {
+    await saveWindowGeometry({ width: 510.7, height: 619.6, right: 31.5, bottom: 23.5 });
+    expect(local.data["window-geometry"]).toEqual({ width: 511, height: 620, right: 32, bottom: 24 });
   });
 
   it("fails closed for malformed stored provider configuration", async () => {

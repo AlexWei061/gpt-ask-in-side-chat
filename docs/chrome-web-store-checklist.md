@@ -39,7 +39,7 @@
 - [ ] Restart Chrome and confirm encrypted side history remains while the session API key must be re-entered.
 - [ ] Clear one history and all histories; verify no unrelated conversation is removed.
 - [ ] Record Chrome version, ChatGPT URL, provider origin, model, and test date.
-- [ ] Capture store screenshots showing selection, the docked panel, and the endpoint disclosure without real private conversations or keys.
+- [ ] Capture store screenshots showing selection, the floating window or minimized bar, and the endpoint disclosure without real private conversations or keys.
 
 ## Submission gate
 

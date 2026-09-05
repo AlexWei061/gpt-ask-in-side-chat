@@ -9,7 +9,7 @@
 
 ## Detailed description
 
-Select text in a ChatGPT message and choose “Ask in side chat” to open a docked companion panel. Ask follow-up questions without leaving the conversation, and keep one encrypted local side-chat history for each ChatGPT conversation.
+Select text in a ChatGPT message and choose “Ask in side chat” to open a movable companion window. Minimize it to a small bar when you want it out of the way, restore it with one click, and keep one encrypted local side-chat history for each ChatGPT conversation.
 
 Side Chat Companion uses the OpenAI-compatible model endpoint and API key that you configure. Each request includes the messages currently visible in the conversation so the model has the relevant context. Text, PDF, and explicitly approved image attachments can be prepared locally. The extension warns instead of silently dropping context when a request is too large.
 
@@ -20,8 +20,8 @@ This independent extension is not affiliated with or endorsed by OpenAI.
 ## Privacy dashboard answers
 
 - Single purpose: Let users ask a separate configured AI model questions about selected text and visible context in their current ChatGPT conversation.
-- `storage` justification: Store provider settings and panel width, keep the API key for the Chrome session, and keep AES-GCM-encrypted side-chat history locally.
-- `chatgpt.com` site access justification: Detect selected message text, count visible messages when the user opens the side chat, read the visible conversation when the user submits a side-chat question, and render the docked panel.
+- `storage` justification: Store provider settings and floating-window position and size, keep the API key for the Chrome session, and keep AES-GCM-encrypted side-chat history locally.
+- `chatgpt.com` site access justification: Detect selected message text, count visible messages when the user opens the side chat, read the visible conversation when the user submits a side-chat question, and render the floating window.
 - Optional provider-origin access justification: Send the user-approved request directly to the one model API origin the user configures. Permission is requested at save time for that origin.
 - Remote code: No. All executable JavaScript and the PDF worker ship in the extension. Provider responses are treated as data and sanitized before display.
 - Data categories to disclose: website content, personal communications, user-provided content/attachments, and authentication information.

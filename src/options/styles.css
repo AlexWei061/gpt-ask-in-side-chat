@@ -6,6 +6,8 @@
 }
 
 body { margin: 0; }
+.embedded main { margin:0; padding:16px; border:0; border-radius:0; box-shadow:none; }
+.embedded h1 { font-size:18px; }
 
 main {
   max-width: 720px;

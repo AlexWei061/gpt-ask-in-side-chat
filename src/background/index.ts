@@ -3,13 +3,13 @@ import { HistoryStore } from "./history-store";
 import { streamChatCompletion } from "./provider";
 import { chatCompletionsUrl, permissionPattern } from "./permissions";
 import {
-  clampPanelWidth,
   forgetSessionKey,
   loadInternalSettings,
   loadUiPreferences,
+  normalizeWindowGeometry,
   publicSettings,
   restrictStorageAccess,
-  savePanelWidth,
+  saveWindowGeometry,
   saveProviderConfig,
   setSessionKey,
 } from "./settings";
@@ -98,10 +98,10 @@ async function handleRuntimeRequest(request: RuntimeRequest): Promise<RuntimeRes
       case "key:forget": await forgetSessionKey(); return { ok: true };
       case "provider:test": await testProviderConnection(); return { ok: true };
       case "ui:get": return { ok: true, value: await loadUiPreferences() };
-      case "ui:set-width": {
-        const width = clampPanelWidth(request.width);
-        await savePanelWidth(width);
-        return { ok: true, value: { panelWidth: width } };
+      case "ui:set-geometry": {
+        const windowGeometry = normalizeWindowGeometry(request.geometry);
+        await saveWindowGeometry(windowGeometry);
+        return { ok: true, value: { windowGeometry } };
       }
       case "history:load": return { ok: true, value: await historyStore.get(request.conversationId) };
       case "history:clear": await clearConversation(request.conversationId); return { ok: true };

@@ -5,14 +5,14 @@ import { ExtensionError } from "../src/shared/errors";
 import type { SendPayload, SideChatRecord } from "../src/shared/types";
 
 const config = { baseUrl: "https://api.example.com/v1", model: "model-a", contextWindowTokens: 4096, supportsImages: false };
-const payload: SendPayload = {
+const payload = {
   conversationId: "conversation-1",
   mainMessages: [{ index: 0, role: "user", content: "main context", links: [] }],
   quote: { text: "main context", sourceRole: "user", sourceMessageIndex: 0 },
   question: "What does this mean?",
   attachments: [],
   compressOldContext: false,
-};
+} satisfies SendPayload;
 
 class MemoryHistory {
   record: SideChatRecord | null = null;
@@ -44,6 +44,23 @@ function errorCode(error: unknown): string | undefined {
 }
 
 describe("ChatService", () => {
+  it.each([true, false])("retries an unquoted follow-up without duplicating history (partial: %s)", async (partial) => {
+    const { quote, ...followUp } = payload;
+    const stream = vi.fn<ChatServiceDependencies["stream"]>()
+      .mockImplementationOnce(async ({ onDelta }) => {
+        if (partial) onDelta("partial follow-up");
+        throw new Error("connection lost");
+      })
+      .mockResolvedValueOnce("Follow-up answer");
+    const { service, history } = createService({ stream });
+    await expect(service.send(followUp, new AbortController().signal, () => {})).rejects.toThrow("connection lost");
+    const record = await service.send(followUp, new AbortController().signal, () => {});
+    expect(record.messages.map((message) => message.content)).toEqual([payload.question, "Follow-up answer"]);
+    expect(record.messages[0]).not.toHaveProperty("quote");
+    expect(history.record).toEqual(record);
+    expect(JSON.stringify(stream.mock.calls[1]?.[0].messages)).not.toContain("partial follow-up");
+  });
+
   it("emits accepted and deltas then persists a successful exchange", async () => {
     const { service, history } = createService();
     const events: unknown[] = [];
