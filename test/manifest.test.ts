@@ -42,6 +42,7 @@ describe("release manifest", () => {
     const manifest = JSON.parse(await readFile("dist/manifest.json", "utf8"));
     await expect(readFile("dist/katex/katex.min.css", "utf8")).resolves.toContain("KaTeX");
     await expect(readFile("dist/katex/fonts/KaTeX_Main-Regular.woff2")).resolves.toBeTruthy();
+    await expect(readFile("dist/katex/LICENSE", "utf8")).resolves.toContain("Copyright (c) 2013-2020 Khan Academy");
     expect(manifest.web_accessible_resources).toContainEqual({
       resources: ["pdf.worker.min.mjs", "katex/katex.min.css", "katex/fonts/*.woff2"],
       matches: ["https://chatgpt.com/*"],

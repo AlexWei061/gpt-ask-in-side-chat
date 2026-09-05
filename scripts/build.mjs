@@ -18,6 +18,7 @@ await cp("public/icons", "dist/icons", { recursive: true });
 await cp(pdfWorker, path.join("dist", "pdf.worker.min.mjs"));
 await mkdir(path.join("dist", "katex", "fonts"), { recursive: true });
 await cp(katexCss, path.join("dist", "katex", "katex.min.css"));
+await cp(path.join(path.dirname(katexCss), "..", "LICENSE"), path.join("dist", "katex", "LICENSE"));
 for (const font of (await readdir(katexFonts)).filter((file) => file.endsWith(".woff2"))) {
   await cp(path.join(katexFonts, font), path.join("dist", "katex", "fonts", font));
 }

@@ -10,7 +10,7 @@ const katexFonts = (await readdir(path.join(katexDirectory, "fonts")))
   .filter((file) => file.endsWith(".woff2"));
 const expectedFiles = [
   "background.js", "content.js", "icons/icon-16.png", "icons/icon-32.png", "icons/icon-48.png", "icons/icon-128.png",
-  "katex/katex.min.css", ...katexFonts.map((font) => `katex/fonts/${font}`),
+  "katex/LICENSE", "katex/katex.min.css", ...katexFonts.map((font) => `katex/fonts/${font}`),
   "manifest.json", "options.html", "options.js", "pdf.worker.min.mjs",
 ].sort();
 
