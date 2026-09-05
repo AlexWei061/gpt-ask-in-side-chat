@@ -56,6 +56,102 @@ describe("side panel", () => {
     panel.destroy();
   });
 
+  it("keeps stored turns chronological and shows each question before its quote", () => {
+    const panel = new SidePanel(document, { onSend: vi.fn() });
+    panel.setConversation("c", [
+      { id: "u1", role: "user", content: "第一个问题", quote: { ...quote, text: "第一个引用" }, status: "complete", createdAt: "" },
+      { id: "a1", role: "assistant", content: "第一个回答", status: "complete", createdAt: "" },
+      { id: "u2", role: "user", content: "第二个问题", quote: { ...quote, text: "第二个引用" }, status: "complete", createdAt: "" },
+      { id: "a2", role: "assistant", content: "第二个回答", status: "complete", createdAt: "" },
+    ]);
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    const rendered = Array.from(root.querySelectorAll<HTMLElement>(".messages > .message"));
+    expect(rendered.map((node) => node.textContent?.replace(/\s+/g, ""))).toEqual([
+      "第一个问题引用内容第一个引用",
+      "第一个回答",
+      "第二个问题引用内容第二个引用",
+      "第二个回答",
+    ]);
+    expect(Array.from(rendered[0]!.children).map((node) => node.className)).toEqual(["message-content", "quote"]);
+    panel.destroy();
+  });
+
+  it("keeps a fresh quote by the composer and shows the submitted question immediately", () => {
+    const panel = new SidePanel(document, { onSend: vi.fn() });
+    panel.setConversation("c", [
+      { id: "u", role: "user", content: "之前的问题", status: "complete", createdAt: "" },
+      { id: "a", role: "assistant", content: "之前的回答", status: "complete", createdAt: "" },
+    ]);
+    panel.open(quote);
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    expect(root.querySelector(".messages")!.textContent).not.toContain("selected words");
+    expect(root.querySelector("[data-active-quote]")?.textContent).toContain("selected words");
+    expect(root.querySelector(".messages")!.compareDocumentPosition(root.querySelector("[data-active-quote]")!))
+      .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(root.querySelector("textarea")?.getAttribute("aria-describedby"))
+      .toBe(root.querySelector("[data-active-quote]")?.id);
+
+    const textarea = root.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea.value = "现在的问题";
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    root.querySelector<HTMLFormElement>("form")!.requestSubmit();
+
+    const rendered = Array.from(root.querySelectorAll<HTMLElement>(".messages > .message"));
+    expect(rendered.map((node) => node.textContent?.replace(/\s+/g, ""))).toEqual([
+      "之前的问题",
+      "之前的回答",
+      "现在的问题引用内容selectedwords",
+    ]);
+    expect(root.querySelector("[data-active-quote]")).toBeNull();
+    panel.setAccepted();
+    expect(root.querySelector(".messages > .message:last-child")?.textContent?.replace(/\s+/g, ""))
+      .toBe("现在的问题引用内容selectedwords");
+    panel.destroy();
+  });
+
+  it("shows one current question and quote through streaming, retry, and completion", () => {
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => { callback(0); return 1; });
+    const onSend = vi.fn();
+    const panel = new SidePanel(document, { onSend });
+    const previous: SideMessage[] = [
+      { id: "u1", role: "user", content: "旧问题", status: "complete", createdAt: "" },
+      { id: "a1", role: "assistant", content: "旧回答", status: "complete", createdAt: "" },
+    ];
+    panel.setConversation("c", previous);
+    panel.open(quote);
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    const countCurrent = () => Array.from(root.querySelectorAll(".messages .message.user .message-content"))
+      .filter((node) => node.textContent?.includes("当前问题")).length;
+    const countQuote = () => Array.from(root.querySelectorAll(".messages .quote-content"))
+      .filter((node) => node.textContent === quote.text).length;
+    const input = root.querySelector<HTMLTextAreaElement>("textarea")!;
+    input.value = "当前问题";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    root.querySelector<HTMLFormElement>("form")!.requestSubmit();
+    expect(countCurrent()).toBe(1); expect(countQuote()).toBe(1);
+
+    panel.setAccepted();
+    panel.appendDelta("旧的局部回答");
+    expect(countCurrent()).toBe(1); expect(countQuote()).toBe(1);
+    panel.setError({ message: "连接中断", retryable: true });
+    expect(countCurrent()).toBe(1); expect(countQuote()).toBe(1);
+    root.querySelector<HTMLButtonElement>("[data-action=retry]")!.click();
+    expect(root.textContent).not.toContain("旧的局部回答");
+    panel.appendDelta("最终回答");
+
+    panel.complete([
+      ...previous,
+      { id: "u2", role: "user", content: "当前问题", quote, status: "complete", createdAt: "" },
+      { id: "a2", role: "assistant", content: "最终回答", status: "complete", createdAt: "" },
+    ]);
+    expect(countCurrent()).toBe(1); expect(countQuote()).toBe(1);
+    expect(root.querySelector("[data-pending-message]")).toBeNull();
+    expect(Array.from(root.querySelectorAll<HTMLElement>(".messages > .message")).slice(-2).map((node) => node.textContent?.replace(/\s+/g, "")))
+      .toEqual(["当前问题引用内容selectedwords", "最终回答"]);
+    expect(onSend).toHaveBeenCalledTimes(2);
+    panel.destroy();
+  });
+
   it("shows the captured boundary, destination, model, limit, and accepted token estimate", () => {
     const panel = new SidePanel(document, { onSend: vi.fn() });
     panel.setConversation("conversation", []);

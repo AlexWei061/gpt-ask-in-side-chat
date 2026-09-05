@@ -25,6 +25,8 @@ button:focus-visible,.resize:focus-visible { outline:2px solid #10a37f; outline-
 .message-content table { display:block; max-width:100%; overflow:auto; border-collapse:collapse; }
 .message-content td,.message-content th { border:1px solid #ffffff26; padding:6px 10px; }
 .quote { align-self:stretch; white-space:pre-wrap; border-left:3px solid #10a37f; background:#ffffff09; border-radius:2px 9px 9px 2px; padding:8px 10px; font-size:12px; color:#b4b4b4; }
+.quote-label { display:block; margin-bottom:3px; color:#8e8e8e; font-size:11px; }
+.active-quote { flex-shrink:0; max-height:132px; margin:8px 16px 0; overflow:auto; }
 .incomplete { margin-top:5px; color:#d7b874; font-size:12px; }
 .math-display { max-width:100%; overflow-x:auto; overflow-y:hidden; padding:8px 0; }
 .math-display .katex-display { margin:.35em 0; } .math-display .katex-display > .katex { text-align:left; }
