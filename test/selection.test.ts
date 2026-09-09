@@ -35,6 +35,26 @@ describe("selection", () => {
     expect(quoteFromRange(range, new ChatGptPageAdapter(document))).toEqual({ text: "current markup", sourceRole: "assistant", sourceMessageIndex: 0 });
   });
 
+  it("offers the selection action for a message nested inside an article without extracting conversation text", () => {
+    document.body.innerHTML = `<main><article><div data-message-author-role="user">Question</div></article><article><div data-message-author-role="assistant"><p id="a">Answer</p></div></article></main>`;
+    const extract = vi.spyOn(ChatGptPageAdapter.prototype, "extractConversation");
+    const onAsk = vi.fn();
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => { callback(0); return 1; });
+    const range = document.createRange();
+    range.selectNodeContents(document.querySelector("#a")!);
+    document.getSelection()?.addRange(range);
+    const controller = new SelectionController(document, onAsk);
+    const button = document.querySelector<HTMLButtonElement>("[data-side-chat-selection-action]")!;
+
+    try {
+      document.dispatchEvent(new Event("selectionchange"));
+      expect(button.style.display).toBe("block");
+      button.click();
+      expect(onAsk).toHaveBeenCalledWith({ text: "Answer", sourceRole: "assistant", sourceMessageIndex: 1 });
+      expect(extract).not.toHaveBeenCalled();
+    } finally { controller.destroy(); }
+  });
+
   it("uses the adapter's ordered main-message index", () => {
     document.body.innerHTML = `<article data-message-author-role="assistant"><p>outside</p></article><main><article data-message-author-role="assistant"><p id="a">inside</p></article></main>`;
     const range = document.createRange();
@@ -43,8 +63,24 @@ describe("selection", () => {
     expect(quoteFromRange(range, new ChatGptPageAdapter(document))).toEqual({ text: "inside", sourceRole: "assistant", sourceMessageIndex: 0 });
   });
 
-  it("fails closed when a preceding message candidate is hidden", () => {
+  it("checks only the selected source while leaving incomplete conversation checks to extraction", () => {
     document.body.innerHTML = `<main><article data-message-author-role="assistant" hidden>hidden</article><article data-message-author-role="assistant"><p id="a">visible</p></article></main>`;
+    const range = document.createRange();
+    range.selectNodeContents(document.querySelector("#a")!);
+    const adapter = new ChatGptPageAdapter(document);
+    const extract = vi.spyOn(adapter, "extractConversation");
+
+    expect(quoteFromRange(range, adapter)).toEqual({ text: "visible", sourceRole: "assistant", sourceMessageIndex: 1 });
+    expect(extract).not.toHaveBeenCalled();
+    expect(adapter.extractConversation().certain).toBe(false);
+  });
+
+  it.each([
+    '<article data-message-author-role="assistant" hidden><p id="a">hidden message</p></article>',
+    '<article><div data-message-author-role="assistant"><p id="a" style="display:none">hidden text</p></div></article>',
+    '<article data-message-author-role="assistant"><div class="markdown" hidden><p id="a">hidden body</p></div></article>',
+  ])("ignores a selection from hidden content: %s", (markup) => {
+    document.body.innerHTML = `<main>${markup}</main>`;
     const range = document.createRange();
     range.selectNodeContents(document.querySelector("#a")!);
 
@@ -313,15 +349,17 @@ describe("selection", () => {
       return 42;
     });
     const cancel = vi.spyOn(window, "cancelAnimationFrame");
+    const candidates = vi.spyOn(ChatGptPageAdapter.prototype, "getMessageElements");
     const extract = vi.spyOn(ChatGptPageAdapter.prototype, "extractConversation");
     const controller = new SelectionController(document, vi.fn());
 
     document.dispatchEvent(new Event("selectionchange"));
     document.dispatchEvent(new Event("selectionchange"));
     expect(window.requestAnimationFrame).toHaveBeenCalledTimes(1);
-    expect(extract).not.toHaveBeenCalled();
+    expect(candidates).not.toHaveBeenCalled();
     refresh?.(0);
-    expect(extract).toHaveBeenCalledTimes(1);
+    expect(candidates).toHaveBeenCalledTimes(1);
+    expect(extract).not.toHaveBeenCalled();
 
     document.dispatchEvent(new Event("selectionchange"));
     controller.destroy();

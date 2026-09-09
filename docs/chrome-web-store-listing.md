@@ -1,38 +1,94 @@
-# Chrome Web Store Listing Draft
+# Chrome 应用商店介绍草稿
 
-## Product details
+以下公开文案与当前中文界面保持一致。发布者信息、公开网址和审核专用配置仍需在提交前落实；已准备的演示截图需与最终验收版本核对。不要把审核密钥放进本文件或公开介绍。
 
-- Name: Side Chat Companion
-- Category: Productivity
-- Language: English
-- Short description: Ask about selected ChatGPT text in a private, persistent side chat using your own model endpoint.
+## 基本信息
 
-## Detailed description
+- 名称：侧边对话助手
+- 类别：生产力（以开发者后台可选分类为准）
+- 默认语言：中文（简体）
+- 简短说明：在 ChatGPT 页面划词追问或直接打开独立侧边对话，使用自备模型接口，本地保存每个对话的问答记录。
 
-Select text in a ChatGPT message and choose “Ask in side chat” to open a movable companion window. Minimize it to a small bar when you want it out of the way, restore it with one click, and keep one encrypted local side-chat history for each ChatGPT conversation.
+## 详细介绍（可复制到商店）
 
-Side Chat Companion uses the OpenAI-compatible model endpoint and API key that you configure. Each request includes the messages currently visible in the conversation so the model has the relevant context. Text, PDF, and explicitly approved image attachments can be prepared locally. The extension warns instead of silently dropping context when a request is too large.
+在 ChatGPT 页面旁继续追问，不打断主对话。点击「侧边对话」收起栏即可打开浮窗，也可以选中一段消息后点击「在侧栏中提问」。窗口展开时，划词会更新当前引用；可以清除引用，也可以直接输入问题。
 
-Privacy is built into the workflow: the extension developer operates no backend, receives no conversation data or API keys, and collects no analytics. Your API key stays in Chrome session storage. Side-chat history is encrypted and stored locally. Data is sent only when you press Send and goes directly to the provider endpoint you approved.
+主要功能：
 
-This independent extension is not affiliated with or endorsed by OpenAI.
+- 拖动、调整窗口大小、最小化，刷新后恢复窗口和本地侧边记录。
+- 每个 ChatGPT 对话保存独立的侧边问答历史。
+- 流式显示回答，支持 Markdown、代码块和数学公式，可随时停止生成。
+- 发送时使用当前页面可读取的对话作为上下文；附件由你逐个选择确认后读取和发送。
+- 支持文本文件、可提取文字的 PDF，以及兼容模型的图片输入。
+- 超过上下文预算时给出提示；可主动启用旧上下文压缩。
 
-## Privacy dashboard answers
+使用前请注意：
 
-- Single purpose: Let users ask a separate configured AI model questions about selected text and visible context in their current ChatGPT conversation.
-- `storage` justification: Store provider settings and floating-window position and size, keep the API key for the Chrome session, and keep AES-GCM-encrypted side-chat history locally.
-- `chatgpt.com` site access justification: Detect selected message text, count visible messages when the user opens the side chat, read the visible conversation when the user submits a side-chat question, and render the floating window.
-- Optional provider-origin access justification: Send the user-approved request directly to the one model API origin the user configures. Permission is requested at save time for that origin.
-- Remote code: No. All executable JavaScript and the PDF worker ship in the extension. Provider responses are treated as data and sanitized before display.
-- Data categories to disclose: website content, personal communications, user-provided content/attachments, and authentication information.
-- Limited-use certification: Data is used and transferred only to provide the disclosed single purpose; not for advertising, sale, lending, unrelated profiling, or developer human review.
+- 需要自备兼容流式 Chat Completions 的模型接口、模型名称和 API 密钥。扩展不提供模型额度，服务商可能收取问答、连接测试和上下文压缩费用。
+- 首次使用需阅读并同意数据说明，保存配置并授权该接口访问，然后刷新 ChatGPT 页面。
+- 当前支持 `chatgpt.com` 上 `/c/<会话 ID>` 形式的对话。空白新对话页可以打开窗口和设置，建立主对话后才能发送侧边问题。
+- 只读取当前页面可访问的消息，不能保证包含尚未加载或被隐藏的完整历史。
+- 单个附件最大为 20 MiB。PDF 不支持扫描件 OCR；图片需要配置支持图片输入的模型。
 
-## Reviewer instructions
+数据由浏览器直接发送至你配置并授权的模型服务商，包括当前可读取的主对话、侧边问题与历史、引文和明确选择的附件。打开窗口或划词不会向服务商发送对话；连接测试发送固定测试提示；启用旧上下文压缩后，超限时会向同一接口额外发送压缩请求。服务商按照其自身条款处理收到的数据。
 
-1. Open the extension settings and read/accept the prominent data disclosure.
-2. Enter the supplied temporary OpenAI-compatible endpoint, model name, context window, and review API key; save and grant access.
-3. Click **Test connection**.
-4. Open the supplied ChatGPT test conversation, select text in a user or assistant message, and click **Ask in side chat**.
-5. Submit a question, reload the page, select text again, and confirm the side history remains.
+扩展开发者没有接收这些数据的后端，不收集使用统计。API 密钥保存在本机的扩展存储中，扩展重新加载或 Chrome 重启后仍保留，可在设置页点击「忘记已保存的 API 密钥」移除。侧边记录在本设备加密保存，可清空，不提供跨设备同步。
 
-Before submission, replace this section with working temporary reviewer credentials and a reproducible conversation URL or test account instructions.
+本扩展是独立项目，与 OpenAI 无隶属关系，未获其背书。
+
+## 隐私后台填写依据
+
+以下是填写依据，不代表已经在后台提交或通过审核。以提交当天的实际字段为准，逐项对照当前安装包与公开隐私政策。[官方隐私字段说明](https://developer.chrome.com/docs/webstore/cws-dashboard-privacy)
+
+| 字段 | 建议填写内容 |
+| --- | --- |
+| 单一用途 | 在当前 ChatGPT 对话旁，使用用户自行配置的模型接口进行独立追问，并保存该对话的本地侧边问答记录。 |
+| `storage` 权限 | 保存模型配置、数据说明同意状态及窗口偏好；在本机持续保存 API 密钥；在本地保存加密侧边记录。 |
+| `chatgpt.com` 网站访问 | 识别当前对话及所选消息、显示浮窗、发送时读取当前可访问消息，并在用户确认后处理附件。 |
+| 可选模型接口权限 | 支持用户配置不同服务商；保存时只请求当前配置接口对应的网站权限，用于直接请求该模型 API。远程使用 HTTPS，本机回环接口可用 HTTP。 |
+| 远程代码 | 否。可执行 JavaScript、PDF worker 和显示所需资源随扩展打包；模型回答作为数据处理并在显示前清理。 |
+| 数据处理类别 | 按内容披露「网站内容」「个人通信」及「身份验证信息」；用户输入、模型回答、对话正文和附件可能包含其他个人或敏感数据，应按最终后台字段如实勾选，不能因开发者不接收数据而声明完全不处理数据。 |
+| 限定用途声明 | 数据处理和传输仅用于上述功能；开发者不出售数据，不用于广告、无关画像、信贷或借贷决策，不安排人工查看用户对话。 |
+
+## 审核说明（填写到后台 Test instructions）
+
+审核说明应提供可用配置和可重复操作步骤；官方允许在审核说明中提供受限访问所需的凭据。[官方审核说明](https://developer.chrome.com/docs/webstore/cws-dashboard-test-instructions)
+
+提交前由发布者在后台填写以下专用配置，确保它们在整个审核期间有效，并设置合理额度限制：
+
+| 审核配置 | 发布前待填写 |
+| --- | --- |
+| 模型 Base URL | 实际可访问的 HTTPS 接口地址，不含 `/chat/completions` 后缀 |
+| 模型名称 | 该接口实际支持的模型 ID |
+| 上下文窗口 | 模型真实支持的 token 数 |
+| 图片输入 | 是／否；若测试图片，需提供支持图片的模型 |
+| API 密钥 | 仅在开发者后台的审核说明中提供专用、可撤销、设有额度上限的密钥 |
+| 有效期与额度 | 覆盖审核期间；提供失效后的联系途径 |
+| ChatGPT 访问步骤 | 说明登录要求；需要专用账号时由发布者通过允许的方式提供可用于审核的账号和登录步骤，不使用私人历史对话 |
+| 审核支持联系 | 发布者可及时响应的联系渠道 |
+
+操作步骤：
+
+1. 安装后打开「侧边对话助手」设置，阅读完整隐私政策，勾选同意数据说明。
+2. 填入上表的接口地址、模型、上下文窗口、图片支持和 API 密钥。点击「保存并授权接口访问」，同意对应接口的网站访问权限，再点击「测试连接」。预期显示测试成功。
+3. 登录 ChatGPT，新建无私密数据的测试对话，发送「请用三句话介绍二分查找」。等待主对话回复，确认地址变成 `https://chatgpt.com/c/<会话 ID>`。不使用 `/share/` 链接。
+4. 刷新页面，点击「侧边对话」展开浮窗，输入「用一个简单例子补充说明」并发送。预期收到流式回答。
+5. 在主对话中选中一段用户或助手消息，确认引用更新；清除引用，再选另一段内容并提问。收起窗口后，再验证划词入口「在侧栏中提问」。
+6. 刷新同一页面，确认侧边历史恢复；新建另一个主对话，确认记录独立。验证拖动、调整大小、最小化及窗口恢复。
+7. 若 ChatGPT 测试账号支持上传文件，上传仅含「附件审核示例」的 `review.txt`，再发送侧边问题。确认出现附件清单：先不选该文件并继续，再次发送时勾选该文件并确认。无法读取时可自行选择同一文件或跳过。PDF 和图片能力按提供的账号、模型分别验证。
+8. 发送一个需要较长回答的问题，点击「停止生成」，确认可以继续发送；测试无效密钥后再恢复正确密钥。重新加载扩展和重启 Chrome 后，确认侧边历史及 API 密钥仍保留，无需重新填写密钥即可测试连接。
+9. 在浮窗清空当前记录，再在设置页清空全部记录、点击「忘记已保存的 API 密钥」，验证对应操作；再次重新加载扩展，确认已忘记的密钥不会恢复。测试结束后不留私人内容。
+
+审核完成且无需复审使用后，撤销审核专用密钥。更新审核包时重新验证整套配置与步骤。
+
+## 发布者信息与素材
+
+- 公开隐私政策：将 `public/privacy.html` 托管至稳定、无需登录的 HTTPS 地址，填写到商店隐私字段。扩展内置文件不等于公开 URL。
+- 公开支持联系方式：待发布者确定，并在商店详情页填写，与隐私政策的联系指引保持一致。
+- 图标：`public/icons/icon-128.png`。
+- 功能截图：使用实际扩展和非私密测试内容，建议分别展示「划词引用」「独立问答与浮窗」「接口配置与数据说明」。至少 1 张，推荐 1280×800；640×400 也受支持。
+- 小型宣传图：440×280，展示本扩展品牌和核心使用场景。避免让人误认为 OpenAI 官方产品。
+
+已准备的三张功能截图、宣传图及生成方式见 [商店素材](store-assets/README.md)。截图使用实际扩展界面与合成演示数据。
+
+上述尺寸与必需素材依据 [Chrome 官方图片要求](https://developer.chrome.com/docs/webstore/images)，上传时再次核对后台要求。

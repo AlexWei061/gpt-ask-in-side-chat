@@ -26,7 +26,7 @@ beforeEach(() => { document.head.innerHTML = ""; document.body.innerHTML = '<mai
 afterEach(() => { vi.resetModules(); });
 
 describe("options onboarding", () => {
-  it("loads saved non-secret settings without exposing the session key", async () => {
+  it("loads saved non-secret settings without exposing the saved key", async () => {
     installChrome({ config: savedConfig, privacyAccepted: true, hasSessionKey: true });
     await loadOptions();
     expect(document.querySelector("h1")?.textContent).toBe("侧边对话助手");
@@ -37,6 +37,9 @@ describe("options onboarding", () => {
     expect(document.querySelector<HTMLInputElement>("#privacy")?.checked).toBe(true);
     expect(document.querySelector<HTMLInputElement>("#api-key")?.value).toBe("");
     expect(document.querySelector<HTMLInputElement>("#api-key")?.placeholder).toMatch(/已设置密钥/);
+    expect(document.querySelector(".data-controls")?.textContent).toContain("扩展重新加载或 Chrome 重启后仍保留");
+    expect(document.querySelector("#forget")?.textContent).toBe("忘记已保存的 API 密钥");
+    expect(document.querySelector("#app")?.textContent).not.toContain("本次 Chrome 会话");
   });
 
   it("requests only the normalized endpoint origin, saves settings, and keeps an existing blank key", async () => {
@@ -48,6 +51,7 @@ describe("options onboarding", () => {
     expect(chromeMock.request).toHaveBeenCalledWith({ origins: ["https://api.example.com/*"] });
     expect(chromeMock.sendMessage.mock.calls.some(([value]) => value.type === "key:set")).toBe(false);
     expect(document.querySelector("#status")?.textContent).toMatch(/已保存/);
+    expect(document.querySelector("#status")?.textContent).toContain("刷新已有 ChatGPT 页面");
   });
 
   it("does not save before disclosure acceptance or when endpoint permission is denied", async () => {

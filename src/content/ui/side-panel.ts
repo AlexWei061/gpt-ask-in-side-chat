@@ -8,6 +8,7 @@ export type PanelContextSummary = { capturedMessages: number; endpointOrigin: st
 export type PanelError = { message: string; retryable: boolean; diagnostic?: string };
 export interface SidePanelOptions {
   onSend: (payload: PanelSend) => void;
+  onStop?: () => void;
   onClear?: () => void;
   onSettingsClose?: () => void;
   onGeometryChange?: (geometry: WindowGeometry) => void;
@@ -30,6 +31,8 @@ export class SidePanel {
   private readonly host: HTMLElement;
   private readonly root: ShadowRoot;
   private readonly stopTheme: () => void;
+  private readonly katexStylesheetUrl: string;
+  private readonly settingsUrl: string;
   private geometry = { ...DEFAULT_GEOMETRY };
   private mode: PanelMode = "minimized";
   private interaction: PointerInteraction | null = null;
@@ -49,8 +52,12 @@ export class SidePanel {
   private streamFrame: number | null = null;
   private missingResolver: ((files: File[] | null | undefined) => void) | null = null;
   private missingDialog: HTMLDialogElement | null = null;
+  private cancelAttachmentConsent: (() => void) | null = null;
 
   constructor(private readonly document: Document, private readonly options: SidePanelOptions) {
+    // Keep rendering usable when reloading the extension invalidates this page's runtime.
+    this.katexStylesheetUrl = typeof chrome !== "undefined" && chrome.runtime?.getURL ? chrome.runtime.getURL("katex/katex.min.css") : "katex/katex.min.css";
+    this.settingsUrl = typeof chrome !== "undefined" && chrome.runtime?.getURL ? chrome.runtime.getURL("options.html") : "options.html";
     this.host = document.createElement("aside");
     this.host.dataset.sideChatHost = "true";
     this.host.setAttribute("aria-label", "侧边对话");
@@ -169,6 +176,31 @@ export class SidePanel {
     this.render();
   }
 
+  stopRequest(): void {
+    const submission = this.lastSubmission;
+    if (this.accepted && submission) {
+      const last = this.messages.at(-1);
+      const incomplete = last?.role === "assistant" && last.status === "incomplete";
+      const user = incomplete ? this.messages.at(-2) : last;
+      const retry = user?.role === "user" && user.content === submission.question
+        && JSON.stringify(user.quote) === JSON.stringify(submission.quote);
+      const createdAt = new Date().toISOString();
+      if (!retry) this.messages = [...this.messages, { id: crypto.randomUUID(), role: "user", content: submission.question, status: "complete", createdAt, ...(submission.quote ? { quote: submission.quote } : {}) }];
+      if (this.stream.trim()) {
+        if (retry && incomplete) this.messages = this.messages.slice(0, -1);
+        this.messages = [...this.messages, { id: crypto.randomUUID(), role: "assistant", content: this.stream, status: "incomplete", createdAt }];
+      }
+    }
+    this.busy = false;
+    this.accepted = false;
+    this.draft = submission?.question ?? this.draft;
+    this.lastSubmission = null;
+    this.stream = "";
+    this.error = null;
+    this.notice = "已停止，可修改问题后重新发送。";
+    this.render();
+  }
+
   setAccepted(approximateTokens?: number): void {
     this.accepted = true;
     this.busy = true;
@@ -221,6 +253,42 @@ export class SidePanel {
     this.endInteraction(false);
     this.document.defaultView?.removeEventListener("resize", this.viewportResize);
     this.host.remove();
+  }
+
+  confirmAttachments(names: string[]): Promise<number[] | undefined> {
+    this.closeMissingResolver(undefined);
+    return new Promise((resolve) => {
+      const dialog = this.document.createElement("dialog");
+      dialog.dataset.attachmentConsent = "true";
+      dialog.setAttribute("aria-label", "选择本次发送的附件");
+      const title = this.document.createElement("h2");
+      title.textContent = "选择本次发送的附件";
+      const explanation = this.document.createElement("p");
+      explanation.textContent = `确认后才会读取所选文件，并随问题发送到 ${this.contextSummary?.endpointOrigin ?? "你配置的模型接口"}。不勾选即可仅发送页面文字和问题。`;
+      const list = this.document.createElement("div");
+      list.className = "attachment-choices";
+      const choices = names.map((name) => {
+        const label = this.document.createElement("label");
+        const input = this.document.createElement("input");
+        input.type = "checkbox";
+        label.append(input, name);
+        list.append(label);
+        return input;
+      });
+      const finish = (selected?: number[]) => {
+        this.cancelAttachmentConsent = null;
+        try { dialog.close(); } catch { /* no native dialog in some test environments */ }
+        dialog.remove();
+        resolve(selected);
+      };
+      this.cancelAttachmentConsent = () => finish();
+      dialog.addEventListener("cancel", (event) => { event.preventDefault(); finish(); });
+      dialog.append(title, explanation, list,
+        this.button("确认并继续", "confirm-attachments", () => finish(choices.flatMap((input, index) => input.checked ? [index] : []))),
+        this.button("取消发送", "cancel-attachments", () => finish()));
+      this.root.append(dialog);
+      try { dialog.showModal(); } catch { dialog.setAttribute("open", ""); }
+    });
   }
 
   resolveMissingAttachments(names: string[]): Promise<File[] | null | undefined> {
@@ -288,6 +356,7 @@ export class SidePanel {
   }
 
   private closeMissingResolver(files: File[] | null | undefined): void {
+    this.cancelAttachmentConsent?.();
     const resolve = this.missingResolver;
     this.missingResolver = null;
     const dialog = this.missingDialog;
@@ -372,7 +441,7 @@ export class SidePanel {
     const katexStyle = this.document.createElement("link");
     katexStyle.rel = "stylesheet";
     katexStyle.dataset.katexStyle = "true";
-    katexStyle.href = typeof chrome !== "undefined" && chrome.runtime?.getURL ? chrome.runtime.getURL("katex/katex.min.css") : "katex/katex.min.css";
+    katexStyle.href = this.katexStylesheetUrl;
     this.root.append(style, katexStyle);
 
     if (this.mode === "minimized") {
@@ -429,11 +498,13 @@ export class SidePanel {
     caption.textContent = "当前对话的独立追问";
     heading.append(title, caption);
     header.append(mark, heading);
-    header.append(this.button(this.settingsOpen ? "返回对话" : "设置", "settings", () => {
+    const settings = this.button(this.settingsOpen ? "返回对话" : "设置", "settings", () => {
       this.settingsOpen = !this.settingsOpen;
       this.render();
       if (!this.settingsOpen) this.options.onSettingsClose?.();
-    }, this.busy));
+    });
+    settings.disabled = this.busy;
+    header.append(settings);
     header.append(this.button("清空", "clear", () => {
       if (this.document.defaultView?.confirm?.("确认清空当前侧边对话记录吗？") ?? true) this.options.onClear?.();
     }));
@@ -443,8 +514,7 @@ export class SidePanel {
     if (this.settingsOpen) {
       const frame = this.document.createElement("iframe");
       frame.title = "模型与 API 设置";
-      const settingsPath = `options.html?embedded=1&theme=${this.host.dataset.sideChatTheme}`;
-      frame.src = typeof chrome !== "undefined" && chrome.runtime?.getURL ? chrome.runtime.getURL(settingsPath) : settingsPath;
+      frame.src = `${this.settingsUrl}?embedded=1&theme=${this.host.dataset.sideChatTheme}`;
       frame.addEventListener("load", () => this.syncSettingsTheme());
       frame.style.cssText = "width:100%;flex:1;min-height:0;border:0;border-radius:0 0 16px 16px";
       panel.append(frame);
@@ -465,7 +535,7 @@ export class SidePanel {
       model.textContent = this.contextSummary.model;
       model.title = `模型：${this.contextSummary.model}`;
       const captured = this.document.createElement("span");
-      captured.textContent = `已读取 ${this.contextSummary.capturedMessages} 条消息`;
+      captured.textContent = `页面消息：${this.contextSummary.capturedMessages} 条`;
       overview.append(model, captured);
       const destination = this.document.createElement("div");
       destination.textContent = `目标：${this.contextSummary.endpointOrigin}`;
@@ -549,8 +619,10 @@ export class SidePanel {
     checkbox.type = "checkbox";
     checkbox.checked = this.lastSubmission?.compressOldContext ?? false;
     label.append(checkbox, " 仅在需要时压缩旧上下文；压缩后仅保留摘要，不保留原文。");
-    const send = this.button("↑", "send", () => {}, true, "发送");
-    send.disabled = !this.canSend();
+    const send = this.busy
+      ? this.button("■", "stop", () => this.options.onStop?.(), false, "停止生成")
+      : this.button("↑", "send", () => {}, true, "发送");
+    send.disabled = this.busy ? false : !this.canSend();
     controls.append(label);
     const composer = this.document.createElement("div");
     composer.className = "composer";

@@ -30,8 +30,7 @@ Object.assign(globalThis, {
     runtime: { onInstalled: installed, onMessage: message, onConnect: connect, openOptionsPage, getPlatformInfo: vi.fn(async () => ({})) },
     action: { onClicked: clicked },
     storage: {
-      local: { get: localGet, set: vi.fn(), setAccessLevel: vi.fn() },
-      session: { get: vi.fn(async (..._keys: unknown[]): Promise<Record<string, unknown>> => ({})), set: vi.fn(), remove: vi.fn(), setAccessLevel: vi.fn() },
+      local: { get: localGet, set: vi.fn(), remove: vi.fn(), setAccessLevel: vi.fn() },
     },
     permissions: { contains: vi.fn(async () => true) },
   },
@@ -61,8 +60,7 @@ describe("background listeners", () => {
       rejectPending = reject;
       signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
     }));
-    localGet.mockResolvedValueOnce({ "provider-config": { baseUrl: "https://api.example.com/v1", model: "model", contextWindowTokens: 4096, supportsImages: false }, "privacy-accepted": true });
-    (globalThis.chrome.storage.session.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ "provider-api-key": { apiKey: "key", providerBaseUrl: "https://api.example.com/v1" } });
+    localGet.mockResolvedValueOnce({ "provider-config": { baseUrl: "https://api.example.com/v1", model: "model", contextWindowTokens: 4096, supportsImages: false }, "privacy-accepted": true, "provider-api-key": { apiKey: "key", providerBaseUrl: "https://api.example.com/v1" } });
     const first = new FakePort("side-chat-stream");
     const second = new FakePort("side-chat-stream");
     connect.listener?.(first);
@@ -99,24 +97,22 @@ describe("background listeners", () => {
     expect(localSet).toHaveBeenCalledWith({ "window-geometry": { width: 340, height: 360, right: 12, bottom: 12 } });
   });
 
-  it("tests only the saved provider endpoint with the session-bound key", async () => {
-    localGet.mockResolvedValueOnce({ "provider-config": { baseUrl: "https://api.example.com/v1", model: "model", contextWindowTokens: 4096, supportsImages: false }, "privacy-accepted": true });
-    (globalThis.chrome.storage.session.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ "provider-api-key": { apiKey: "session-key", providerBaseUrl: "https://api.example.com/v1" } });
+  it("tests only the saved provider endpoint with the saved provider-bound key", async () => {
+    localGet.mockResolvedValueOnce({ "provider-config": { baseUrl: "https://api.example.com/v1", model: "model", contextWindowTokens: 4096, supportsImages: false }, "privacy-accepted": true, "provider-api-key": { apiKey: "saved-key", providerBaseUrl: "https://api.example.com/v1" } });
     stream.mockResolvedValueOnce("OK");
     const response = vi.fn();
     expect(message.listener?.({ type: "provider:test" }, {}, response)).toBe(true);
     await vi.waitFor(() => expect(response).toHaveBeenCalledWith({ ok: true }));
     expect(stream).toHaveBeenCalledWith(expect.objectContaining({
       url: "https://api.example.com/v1/chat/completions",
-      apiKey: "session-key",
+      apiKey: "saved-key",
       model: "model",
       messages: [{ role: "user", content: "Reply with OK." }],
     }));
   });
 
-  it("refuses a provider test until disclosure, config, and a session key are present", async () => {
+  it("refuses a provider test until disclosure, config, and a saved key are present", async () => {
     localGet.mockResolvedValueOnce({ "provider-config": { baseUrl: "https://api.example.com/v1", model: "model", contextWindowTokens: 4096, supportsImages: false }, "privacy-accepted": false });
-    (globalThis.chrome.storage.session.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce({});
     const response = vi.fn();
     message.listener?.({ type: "provider:test" }, {}, response);
     await vi.waitFor(() => expect(response).toHaveBeenCalledWith({ ok: false, error: expect.objectContaining({ code: "PERMISSION_REQUIRED" }) }));
@@ -124,8 +120,7 @@ describe("background listeners", () => {
   });
 
   it("reports a missing runtime host permission before contacting the provider", async () => {
-    localGet.mockResolvedValueOnce({ "provider-config": { baseUrl: "https://api.example.com/v1", model: "model", contextWindowTokens: 4096, supportsImages: false }, "privacy-accepted": true });
-    (globalThis.chrome.storage.session.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ "provider-api-key": { apiKey: "session-key", providerBaseUrl: "https://api.example.com/v1" } });
+    localGet.mockResolvedValueOnce({ "provider-config": { baseUrl: "https://api.example.com/v1", model: "model", contextWindowTokens: 4096, supportsImages: false }, "privacy-accepted": true, "provider-api-key": { apiKey: "saved-key", providerBaseUrl: "https://api.example.com/v1" } });
     (globalThis.chrome.permissions.contains as ReturnType<typeof vi.fn>).mockResolvedValueOnce(false);
     const response = vi.fn(); message.listener?.({ type: "provider:test" }, {}, response);
     await vi.waitFor(() => expect(response).toHaveBeenCalledWith({ ok: false, error: expect.objectContaining({ code: "PERMISSION_REQUIRED" }) }));
@@ -136,8 +131,7 @@ describe("background listeners", () => {
     stream.mockImplementation(({ signal }) => new Promise<string>((_resolve, reject) => {
       signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
     }));
-    localGet.mockResolvedValueOnce({ "provider-config": { baseUrl: "https://api.example.com/v1", model: "model", contextWindowTokens: 4096, supportsImages: false }, "privacy-accepted": true });
-    (globalThis.chrome.storage.session.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ "provider-api-key": { apiKey: "key", providerBaseUrl: "https://api.example.com/v1" } });
+    localGet.mockResolvedValueOnce({ "provider-config": { baseUrl: "https://api.example.com/v1", model: "model", contextWindowTokens: 4096, supportsImages: false }, "privacy-accepted": true, "provider-api-key": { apiKey: "key", providerBaseUrl: "https://api.example.com/v1" } });
     const port = new FakePort("side-chat-stream");
     connect.listener?.(port);
     port.onMessage.listener?.({ type: "start", requestId: "clear", payload: { ...payload, conversationId: "clear-me" } });
@@ -193,9 +187,7 @@ describe("background listeners", () => {
   });
 
   it("normalizes unknown stream failures as retryable network failures", async () => {
-    localGet.mockResolvedValueOnce({ "provider-config": { baseUrl: "https://api.example.com/v1", model: "model", contextWindowTokens: 4096, supportsImages: false }, "privacy-accepted": true });
-    const sessionGet = (globalThis.chrome.storage.session.get as ReturnType<typeof vi.fn>);
-    sessionGet.mockResolvedValueOnce({ "provider-api-key": { apiKey: "key", providerBaseUrl: "https://api.example.com/v1" } });
+    localGet.mockResolvedValueOnce({ "provider-config": { baseUrl: "https://api.example.com/v1", model: "model", contextWindowTokens: 4096, supportsImages: false }, "privacy-accepted": true, "provider-api-key": { apiKey: "key", providerBaseUrl: "https://api.example.com/v1" } });
     stream.mockRejectedValueOnce(new Error("socket lost"));
     const port = new FakePort("side-chat-stream");
     connect.listener?.(port);
@@ -210,8 +202,7 @@ describe("background listeners", () => {
       stream.mockImplementationOnce(({ signal }) => new Promise<string>((_resolve, reject) => {
         signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
       }));
-      localGet.mockResolvedValueOnce({ "provider-config": { baseUrl: "https://api.example.com/v1", model: "model", contextWindowTokens: 4096, supportsImages: false }, "privacy-accepted": true });
-      (globalThis.chrome.storage.session.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ "provider-api-key": { apiKey: "key", providerBaseUrl: "https://api.example.com/v1" } });
+      localGet.mockResolvedValueOnce({ "provider-config": { baseUrl: "https://api.example.com/v1", model: "model", contextWindowTokens: 4096, supportsImages: false }, "privacy-accepted": true, "provider-api-key": { apiKey: "key", providerBaseUrl: "https://api.example.com/v1" } });
       const port = new FakePort("side-chat-stream");
       connect.listener?.(port);
       port.onMessage.listener?.({ type: "start", requestId: "slow", payload: { ...payload, conversationId: "slow-worker" } });

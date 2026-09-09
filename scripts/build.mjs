@@ -14,6 +14,7 @@ const manifest = JSON.parse(await readFile("public/manifest.json", "utf8"));
 if (process.env.SIDECHAT_E2E === "1") manifest.host_permissions = ["https://api.example.test/*"];
 await writeFile("dist/manifest.json", `${JSON.stringify(manifest, null, 2)}\n`);
 await cp("public/options.html", "dist/options.html");
+await cp("public/privacy.html", "dist/privacy.html");
 await cp("public/icons", "dist/icons", { recursive: true });
 await cp(pdfWorker, path.join("dist", "pdf.worker.min.mjs"));
 await mkdir(path.join("dist", "katex", "fonts"), { recursive: true });

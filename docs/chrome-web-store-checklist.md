@@ -1,50 +1,85 @@
-# Chrome Web Store Release Checklist
+# Chrome 应用商店发布检查表
 
-## Account and listing
+本清单区分项目已有实现和待发布者验收事项。复选框代表最终发布批次的核验结果；没有记录证据前不要勾选。自动化通过不等于真实 ChatGPT 页面、真实模型接口或商店审核通过。
 
-- [ ] Register the publisher account, pay the one-time registration fee, and enable two-step verification.
-- [ ] Confirm the public publisher name and support contact.
-- [ ] Use the product details and reviewer flow in `docs/chrome-web-store-listing.md`.
-- [ ] Provide the 128×128 icon, at least one 1280×800 screenshot, a 440×280 small promo tile, and any other assets currently required by the Developer Dashboard.
-- [ ] Host `docs/privacy-policy.md` at a public HTTPS URL and enter that URL in the Privacy tab.
-- [ ] Provide temporary reviewer endpoint credentials and remove/revoke them after review.
-- [ ] Select the intended visibility and regions. Public, unlisted, and private items all undergo policy review.
+## 项目已有实现与材料
 
-## Privacy and permissions
+- Manifest V3；模型请求由扩展后台直接访问用户配置的接口，保存时请求对应接口的网站权限。
+- 本机持续保存的 API 密钥、按对话保存的本地 AES-GCM 加密历史，以及清空记录和忘记密钥入口。
+- 中文界面、可移动和调整大小的浮窗、最小化、自动显示的收起栏、可清除的选文引用、Markdown 和数学公式。
+- 数据说明与附件选择流程：发送时读取主对话；附件确认后才读取，支持跳过和重新选择。
+- 停止生成、请求超时恢复、设置说明、首次配置后刷新提示和扩展内隐私政策入口。
+- [中文商店介绍与审核步骤](chrome-web-store-listing.md)、[隐私政策文本](privacy-policy.md)、可独立托管的 `public/privacy.html`、128×128 图标、[三张功能截图和小型宣传图](store-assets/README.md)、构建与打包脚本。
 
-- [ ] State the extension's narrow single purpose exactly as drafted.
-- [ ] Disclose website content, personal communications, user-provided content/attachments, and authentication information consistently in the listing, Privacy tab, and hosted policy.
-- [ ] Certify that all handled data is strictly necessary for the single purpose and is not used for advertising, sale, lending, unrelated profiling, or developer human review.
-- [ ] Justify `storage`, the `chatgpt.com` content script, and the runtime optional provider-origin permission.
-- [ ] Select **No remote code**; model responses are data, and all JavaScript plus `pdf.worker.min.mjs` are packaged locally.
-- [ ] Confirm the prominent in-product disclosure appears before any conversation data is handled and requires affirmative consent.
+## 开发者账号和公开材料（需要发布者完成）
 
-## Automated release checks
+- [ ] 注册发布者账号、完成注册费步骤并启用两步验证；确认公开发布者名称和支持联系方式。
+- [ ] 将 `public/privacy.html` 托管至公开 HTTPS URL，用未登录浏览器验证可访问；在商店填写 URL，而非本地或 `chrome-extension://` 地址。
+- [ ] 核对商店名称为「侧边对话助手」、默认语言为简体中文；说明自备 API、可能的第三方费用和非 OpenAI 官方身份。
+- [ ] 提供 128×128 PNG 图标、至少 1 张 1280×800 或 640×400 功能截图，以及 440×280 小型宣传图；用真实扩展界面和非私密内容。
+- [ ] 在审核后台填写可用的临时模型接口、模型参数和设有限额的专用密钥；落实 ChatGPT 登录及测试对话创建步骤，确保有效期覆盖审核。
+- [ ] 选择发布可见性和地区，并确认上架后可响应用户与审核支持请求。
 
-- [ ] Run `npm run verify`.
-- [ ] Run `npm run e2e` with the Playwright-bundled Chromium required for extension automation.
-- [ ] Run `npm run package`.
-- [ ] Confirm `unzip -l release/side-chat-companion-0.1.0.zip` places `manifest.json` at the ZIP root and contains only production files.
-- [ ] Confirm `rg -n "test-key|api\\.example\\.test" dist release` has no matches.
-- [ ] Confirm `find dist release -name '*.map' -print` prints nothing.
-- [ ] Run `git diff --check`.
+账号与材料步骤参见 [发布准备](https://developer.chrome.com/docs/webstore/prepare)、[商店介绍](https://developer.chrome.com/docs/webstore/cws-dashboard-listing)和[图片要求](https://developer.chrome.com/docs/webstore/images)。
 
-## Manual browser smoke test
+## 隐私与权限（核对最终安装包、界面、文档和后台）
 
-- [ ] Load `dist/` as an unpacked extension in the current stable Chrome release.
-- [ ] Test selection in a user message, assistant message, code block, and after an SPA conversation change.
-- [ ] Confirm the captured-message count matches the DOM-visible conversation.
-- [ ] Test a valid key, invalid key, 429 response, offline mode, abort, and context overflow.
-- [ ] Test visible text/PDF/image attachments, inaccessible-attachment reselect, and explicit skip.
-- [ ] Restart Chrome and confirm encrypted side history remains while the session API key must be re-entered.
-- [ ] Clear one history and all histories; verify no unrelated conversation is removed.
-- [ ] Record Chrome version, ChatGPT URL, provider origin, model, and test date.
-- [ ] Capture store screenshots showing selection, the floating window or minimized bar, and the endpoint disclosure without real private conversations or keys.
+- [ ] 单一用途说明一致；不能因开发者没有后端而声明扩展完全不处理用户数据。
+- [ ] 按后台实际字段披露网站内容、个人通信、身份验证信息及最终数据使用涉及的其他类别。
+- [ ] 首次同意前不处理对话内容；打开窗口和划词只在本地处理，发送时提取正文；未选择附件不下载或读取文件内容。
+- [ ] 披露测试连接的固定提示请求、超限时经用户启用的额外上下文压缩请求，以及用户所选模型服务商的数据处理与费用。
+- [ ] 解释 `storage`、`chatgpt.com` 内容脚本及可选模型接口权限；保存配置只请求配置接口所需权限。
+- [ ] 全部可执行代码和 PDF worker 随包提供；选择「无远程代码」，确认模型返回内容按数据处理。
+- [ ] 完成限定用途声明，确认数据不用于出售、广告、无关画像、信贷或借贷决策。
+- [ ] 完整隐私政策在扩展内可打开；公开 URL 与本次安装包的实际行为一致。
 
-## Submission gate
+后台填写参见 [隐私字段说明](https://developer.chrome.com/docs/webstore/cws-dashboard-privacy)。
 
-- [ ] Rebuild the final ZIP after every code or manifest change; uploaded versions must increase monotonically.
-- [ ] Verify the hosted privacy-policy URL, final listing assets, reviewer credentials, and publisher account.
-- [ ] Upload and submit only after the publisher explicitly authorizes the final package and visibility.
+## 自动化发布检查（每次发布包均需重新记录）
 
-Current official references: [Prepare your extension](https://developer.chrome.com/docs/webstore/prepare), [Privacy practices](https://developer.chrome.com/docs/webstore/cws-dashboard-privacy), [Store listing](https://developer.chrome.com/docs/webstore/cws-dashboard-listing), and [2026 policy update](https://developer.chrome.com/blog/cws-policy-updates-2026).
+- [x] `npm run verify`：类型检查、单元测试和生产构建通过。
+- [x] `npm run e2e`：使用 Playwright 所需的 Chromium 跑完端到端测试。测试使用模拟页面和接口，只能证明受控场景。
+- [x] `npm run package`：在 E2E 之后重新生产构建，生成不带测试权限的 ZIP。
+- [x] 检查 ZIP 文件清单（本次使用 Python `zipfile`）：根目录包含 `manifest.json`，并包含 `privacy.html`、图标、PDF worker 和渲染所需资源。
+- [x] 核对 ZIP 内的实际清单和文件内容：无 E2E 测试权限、测试密钥、环境配置、source map 或开发文件。不能只对压缩后的 ZIP 运行文本搜索来代替解包检查。
+- [x] `git diff --check` 通过；记录最终版本、Git 提交（如有）和 ZIP 的 SHA-256。
+
+| 本次证据 | 结果 |
+| --- | --- |
+| 扩展版本／提交 | 0.1.0；本次工作区改动尚未提交 |
+| verify／E2E／package 结果及日期 | 2026-09-09：类型检查、253 项单元测试、生产构建通过；2 项 E2E 通过（7.6 秒）；随后重新生产打包成功 |
+| ZIP 路径／大小 | `release/side-chat-companion-0.1.0.zip`；1,002,014 字节，33 个文件 |
+| ZIP SHA-256 | `24e48f1ef13fe556bd3e91aee235df457b5443d6aa265b0e72e0f62abfcc76cd` |
+| 包内容核对 | 每个解压后的文件均与生产 `dist/` 字节一致；清单与 `public/manifest.json` 一致；无测试权限、测试数据或 source map |
+| 测试证据位置 | 本次任务命令输出；E2E 原始截图位于 `test-results/`，已核对并归档至 `docs/store-assets/` |
+
+以上为该次工作区和 ZIP 的证据；源码或清单后续改变时需要重新验证，不能沿用勾选结果。
+
+## 真实浏览器验收（不能用模拟页面代替）
+
+- [ ] 在当前稳定版 Chrome 的新测试配置中加载最终生产包。首次安装、同意说明、保存配置、接口授权、连接测试和刷新引导均可完成。
+- [ ] ChatGPT 空白页显示收起栏；建立 `/c/<会话 ID>` 后可直接问答。用户消息、助手消息、代码块选文正常；嵌套消息结构不出现重复计数或入口消失。
+- [ ] 展开窗口后重新划词自动更新引用，清除引用可直接提问，草稿保留；收起后划词入口可展开窗口。
+- [ ] 当前可读消息数量与页面实际消息一致；切换会话、前进后退和刷新后引用及历史不串到另一对话。
+- [ ] 验证明暗主题、拖动、调整大小、最小化、窗口位置和记录恢复。
+- [ ] 验证有效／无效密钥、429、断网、首个响应超时、流式中途停滞、手动停止和上下文超限；错误后可继续发送，停止不冒充完整回答。
+- [ ] 验证文本／PDF／图片附件的逐项确认、全部不选、取消、读取失败后重选和跳过；未确认时无附件文件请求；超过 20 MiB、扫描 PDF 和不支持图片的模型得到明确提示。
+- [ ] 验证主动启用旧上下文压缩后的行为和费用提示；发送的数据只到配置的模型接口（附件读取请求到其原始地址）。
+- [ ] 重新加载扩展，以及关闭全部 Chrome 进程再启动：本地侧边历史和 API 密钥仍在，无需重新填写密钥即可测试连接。清空当前历史不影响其他对话；清空全部历史和忘记密钥分别有效，已忘记的密钥在重新加载后不恢复。
+- [ ] 将用于商店的每张截图与最终生产包界面核对，不包含真实 API 密钥或私密对话。
+
+| 人工验收记录 | 待填写 |
+| --- | --- |
+| 日期／测试人／Chrome 版本／系统 | |
+| ChatGPT 页面类型及会话结构 | |
+| 模型服务商域名／模型 ID（不记录密钥） | |
+| 测试结果／遗留问题／截图位置 | |
+
+## 提交前最后确认
+
+- [ ] 所有必须项已有通过证据，公开隐私 URL、支持联系方式、素材和审核配置均已实际验证。
+- [ ] 最后一次源码或清单修改后重新构建最终 ZIP；若商店已有上传版本，使用符合后台要求的递增版本号。
+- [ ] 发布者确认最终安装包、文案、可见性及地区后，再在后台上传并提交审核。
+- [ ] 审核完成且无需复审使用后撤销测试密钥；记录审核结果并处理后续反馈。
+
+当前仓库中的准备工作不会自动注册账号、托管页面、提供付费模型额度或提交商店审核。

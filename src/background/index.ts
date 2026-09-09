@@ -117,7 +117,7 @@ async function testProviderConnection(): Promise<void> {
   const settings = await loadInternalSettings();
   if (!settings.privacyAccepted) throw new ExtensionError("PERMISSION_REQUIRED", "请先同意使用说明。");
   if (!settings.config) throw new ExtensionError("PERMISSION_REQUIRED", "请先配置模型接口。");
-  if (!settings.apiKey) throw new ExtensionError("KEY_REQUIRED", "请输入本次 Chrome 会话的 API 密钥。");
+  if (!settings.apiKey) throw new ExtensionError("KEY_REQUIRED", "请先设置 API 密钥。");
   if (!await chrome.permissions.contains({ origins: [permissionPattern(settings.config.baseUrl)] })) {
     throw new ExtensionError("PERMISSION_REQUIRED", "缺少接口访问权限，请保存设置以重新授权。");
   }

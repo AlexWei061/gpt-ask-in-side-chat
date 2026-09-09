@@ -28,6 +28,33 @@ describe("ChatGptPageAdapter", () => {
     expect(new ChatGptPageAdapter(document).extractConversation().certain).toBe(false);
   });
 
+  it("extracts nested message containers once and preserves their order", () => {
+    document.body.innerHTML = `<main>
+      <article><div data-message-author-role="user"><p>Question</p></div></article>
+      <article><div data-message-author-role="assistant"><div class="markdown"><p>Answer</p></div></div></article>
+    </main>`;
+    const adapter = new ChatGptPageAdapter(document);
+
+    expect(adapter.getMessageElements()).toEqual(Array.from(document.querySelectorAll("[data-message-author-role]")));
+    expect(adapter.extractConversation()).toEqual({
+      messages: [
+        { index: 0, role: "user", content: "Question", links: [] },
+        { index: 1, role: "assistant", content: "Answer", links: [] },
+      ],
+      certain: true,
+    });
+  });
+
+  it("keeps unidentified message articles and unsupported roles uncertain beside nested messages", () => {
+    for (const unknown of ["<article>Unidentified message</article>", '<article><div data-message-author-role="tool">Unsupported message</div></article>']) {
+      document.body.innerHTML = `<main><article><div data-message-author-role="assistant">Answer</div></article>${unknown}</main>`;
+      const adapter = new ChatGptPageAdapter(document);
+
+      expect(adapter.getMessageElements()).toHaveLength(2);
+      expect(adapter.extractConversation()).toEqual({ messages: [{ index: 0, role: "assistant", content: "Answer", links: [] }], certain: false });
+    }
+  });
+
   it("preserves visible block boundaries while skipping hidden content", () => {
     document.body.innerHTML = `<main><article data-message-author-role="assistant"><div class="markdown">
       <p>First paragraph.</p><p>Second paragraph.</p>

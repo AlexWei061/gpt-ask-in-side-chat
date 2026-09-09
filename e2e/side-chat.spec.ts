@@ -1,7 +1,20 @@
-import { chromium, expect, test, type BrowserContext } from "@playwright/test";
+import { chromium, expect, test, type BrowserContext, type Page } from "@playwright/test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+
+async function configureProvider(optionsPage: Page, model = "test-model"): Promise<void> {
+  await optionsPage.locator("#privacy").check();
+  await optionsPage.locator("#base-url").fill("https://api.example.test/v1");
+  await optionsPage.locator("#model").fill(model);
+  await optionsPage.locator("#context-window").fill("128000");
+  await optionsPage.locator("#api-key").fill("test-key");
+  // The E2E build pre-grants this origin; Chrome's native permission prompt still needs manual testing.
+  await optionsPage.getByRole("button", { name: "保存并授权接口访问" }).click();
+  await expect(optionsPage.locator("#status")).toContainText("设置已保存");
+  await optionsPage.getByRole("button", { name: "测试连接", exact: true }).click();
+  await expect(optionsPage.locator("#status")).toContainText("连接成功");
+}
 
 test("side chat starts minimized, accepts replaceable selections, and restores quoted history with unquoted follow-ups", async () => {
   const userDataDir = await mkdtemp(path.join(os.tmpdir(), "side-chat-e2e-"));
@@ -18,8 +31,8 @@ test("side chat starts minimized, accepts replaceable selections, and restores q
       ],
     });
     const fixture = (await readFile("test/fixtures/chatgpt-page.html", "utf8"))
-      .replaceAll("<article", "<div")
-      .replaceAll("</article>", "</div>");
+      .replaceAll("<article ", "<article><div ")
+      .replaceAll("</article>", "</div></article>");
     await context.route("https://chatgpt.com/", (route) => route.fulfill({ contentType: "text/html", body: "<main><h1>New chat</h1></main>" }));
     await context.route("https://chatgpt.com/c/demo", (route) => route.fulfill({ contentType: "text/html", body: fixture }));
     await context.route("https://api.example.test/v1/chat/completions", async (route) => {
@@ -51,19 +64,15 @@ M_s,\qquad s\le t
     const optionsPage = context.pages().find((candidate) => candidate.url() === optionsUrl)!;
     await optionsPage.waitForLoadState();
     await expect(optionsPage.getByRole("heading", { name: "使用前说明" })).toBeVisible();
-    await expect(optionsPage.getByText(/发送侧边问题时，扩展会读取这些消息/)).toBeVisible();
+    await expect(optionsPage.getByText(/划词时仅在本地检查来源并读取选中文字/)).toBeVisible();
     await optionsPage.screenshot({ animations: "disabled", path: test.info().outputPath("chinese-settings.png"), fullPage: true });
     for (const theme of ["dark", "light"] as const) {
       await optionsPage.emulateMedia({ colorScheme: theme });
       await expect(optionsPage.locator("html")).toHaveAttribute("data-side-chat-theme", theme);
       await optionsPage.screenshot({ animations: "disabled", path: test.info().outputPath(`settings-${theme}.png`), fullPage: true });
     }
+    await configureProvider(optionsPage);
     await optionsPage.close();
-    await worker.evaluate(async () => {
-      const config = { baseUrl: "https://api.example.test/v1", model: "test-model", contextWindowTokens: 128000, supportsImages: false };
-      await chrome.storage.local.set({ "privacy-accepted": true, "provider-config": config });
-      await chrome.storage.session.set({ "provider-api-key": { apiKey: "test-key", providerBaseUrl: config.baseUrl } });
-    });
 
     const page = await context.newPage();
     const panel = page.locator("[data-side-chat-host]");
@@ -240,6 +249,167 @@ M_s,\qquad s\le t
     await clearQuote.click();
     await expect(activeQuote).toHaveCount(0);
     await expect(panel.locator(".message.user").first().locator(".quote")).toContainText("Use a service worker.");
+  } finally {
+    try { await context?.close(); }
+    finally { await rm(userDataDir, { recursive: true, force: true }); }
+  }
+});
+
+test("attachments require per-send approval and an interrupted stream preserves partial history", async () => {
+  const userDataDir = await mkdtemp(path.join(os.tmpdir(), "side-chat-consent-e2e-"));
+  let context: BrowserContext | undefined;
+  const downloadedFiles: string[] = [];
+  const providerRequests: unknown[] = [];
+
+  try {
+    context = await chromium.launchPersistentContext(userDataDir, {
+      channel: "chromium",
+      headless: true,
+      viewport: { width: 1280, height: 800 },
+      args: [
+        `--disable-extensions-except=${path.resolve("dist")}`,
+        `--load-extension=${path.resolve("dist")}`,
+      ],
+    });
+    // Synthetic page and provider responses for regression tests and draft store demonstrations.
+    await context.route("https://chatgpt.com/c/attachments-demo", (route) => route.fulfill({
+      contentType: "text/html; charset=utf-8",
+      body: `<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><title>侧边对话功能演示</title>
+      <style>
+        * { box-sizing:border-box; }
+        body { margin:0; background:#f3f5f4; color:#25302a; font:14px/1.8 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif; }
+        main { width:min(680px,calc(100% - 64px)); margin:48px 32px; padding:28px; background:#fff; border:1px solid #dde3df; border-radius:16px; }
+        h1 { margin:0 0 16px; font-size:22px; line-height:1.5; }
+        main > p { margin:0 0 24px; padding:10px 14px; border-radius:8px; background:#eef3f0; color:#506057; }
+        article { margin-top:20px; padding-top:16px; border-top:1px solid #e4e9e6; }
+        article p { margin:0 0 12px; }
+        a[download] { display:inline-block; margin:0 10px 0 0; padding:5px 10px; border:1px solid #dde3df; border-radius:7px; color:#3d6650; text-decoration:none; }
+      </style></head><body><main>
+        <h1>侧边对话功能演示</h1><p>以下内容与接口回答均为演示数据。</p>
+        <article><div data-message-author-role="user"><p>我整理了两份笔记，想进一步理解流式响应。</p>
+          <a download="学习笔记.txt" href="/files/approved.txt">学习笔记.txt</a>
+          <a download="私人草稿.txt" href="/files/unapproved.txt">私人草稿.txt</a>
+        </div></article>
+        <article><div data-message-author-role="assistant"><p>流式响应会逐步返回内容，让你更早看到回答。可以选中这段话，在侧边对话中继续提问。</p></div></article>
+      </main></body></html>`,
+    }));
+    await context.route("https://chatgpt.com/files/*.txt", async (route) => {
+      const pathname = new URL(route.request().url()).pathname;
+      downloadedFiles.push(pathname);
+      await route.fulfill({ contentType: "text/plain", body: pathname.endsWith("/approved.txt") ? "学习笔记内容：流式响应会分批返回文本，适合逐步展示较长回答。" : "私人草稿内容：这是未获批准读取的测试文件。" });
+    });
+    await context.route("https://api.example.test/v1/chat/completions", async (route) => {
+      providerRequests.push(route.request().postDataJSON());
+      await route.fulfill({
+        contentType: "text/event-stream",
+        body: `data: ${JSON.stringify({ choices: [{ delta: { content: "流式响应会把回答分成连续的小段返回。\n\n这样你可以先阅读已经生成的内容，等待时也能看到进度；需要调整问题时，可以停止生成后继续提问。" } }] })}\n\ndata: [DONE]\n\n`,
+      });
+    });
+
+    const worker = context.serviceWorkers()[0] ?? await context.waitForEvent("serviceworker");
+    const optionsUrl = `chrome-extension://${new URL(worker.url()).host}/options.html`;
+    await expect.poll(() => context?.pages().some((candidate) => candidate.url() === optionsUrl)).toBe(true);
+    const optionsPage = context.pages().find((candidate) => candidate.url() === optionsUrl)!;
+    await configureProvider(optionsPage, "demo-model");
+    const policyPagePromise = context.waitForEvent("page");
+    await optionsPage.getByRole("link", { name: "阅读完整隐私政策" }).click();
+    const policyPage = await policyPagePromise;
+    await expect(policyPage).toHaveTitle("隐私政策 · 侧边对话助手");
+    await expect(policyPage.getByRole("heading", { name: "侧边对话助手隐私政策", exact: true })).toBeVisible();
+    await expect(policyPage.getByText(/未选择附件的文件内容不会被读取或发送/)).toBeVisible();
+    await policyPage.close();
+    await optionsPage.emulateMedia({ colorScheme: "light" });
+    await expect(optionsPage.locator("#api-key")).toHaveValue("");
+    await optionsPage.locator(".disclosure").scrollIntoViewIfNeeded();
+    await optionsPage.screenshot({ animations: "disabled", path: test.info().outputPath("store-settings-disclosure.png") });
+    providerRequests.length = 0;
+
+    const page = await context.newPage();
+    await page.goto("https://chatgpt.com/c/attachments-demo");
+    const panel = page.locator("[data-side-chat-host]");
+    await panel.getByRole("button", { name: "打开侧边对话" }).click();
+    const consent = panel.locator("dialog[data-attachment-consent]");
+    await panel.locator("textarea").fill("先不发送，我再确认一下。");
+    await panel.locator("textarea").press("Enter");
+    await expect(consent).toBeVisible();
+    await expect(consent.getByRole("checkbox")).toHaveCount(2);
+    await expect(consent.getByRole("checkbox").nth(0)).not.toBeChecked();
+    await expect(consent.getByRole("checkbox").nth(1)).not.toBeChecked();
+    expect(downloadedFiles).toEqual([]);
+    expect(providerRequests).toHaveLength(0);
+    await consent.locator("[data-action=cancel-attachments]").click();
+    await expect(consent).toHaveCount(0);
+    await expect(panel.locator("textarea")).toBeEnabled();
+    expect(downloadedFiles).toEqual([]);
+    expect(providerRequests).toHaveLength(0);
+
+    await panel.locator("textarea").fill("不读取附件，简单说明流式响应是什么。");
+    await panel.locator("textarea").press("Enter");
+    await expect(consent).toBeVisible();
+    await consent.locator("[data-action=confirm-attachments]").click();
+    await expect(panel.locator(".message.assistant")).toHaveCount(1);
+    await expect(panel.locator("textarea")).toBeEnabled();
+    expect(downloadedFiles).toEqual([]);
+    expect(providerRequests).toHaveLength(1);
+    expect(JSON.stringify(providerRequests[0])).not.toContain("学习笔记内容：");
+    expect(JSON.stringify(providerRequests[0])).not.toContain("私人草稿内容：");
+
+    await panel.locator("textarea").fill("根据学习笔记，解释流式响应的作用。");
+    await panel.locator("textarea").press("Enter");
+    await expect(consent).toBeVisible();
+    await expect(consent.getByRole("checkbox").nth(0)).not.toBeChecked();
+    await expect(consent.getByRole("checkbox").nth(1)).not.toBeChecked();
+    await consent.getByRole("checkbox", { name: "学习笔记.txt", exact: true }).check();
+    expect(downloadedFiles).toEqual([]);
+    expect(providerRequests).toHaveLength(1);
+    await consent.screenshot({ animations: "disabled", path: test.info().outputPath("attachment-consent.png") });
+    await page.screenshot({ animations: "disabled", path: test.info().outputPath("store-attachment-consent.png") });
+    await consent.locator("[data-action=confirm-attachments]").click();
+    await expect(panel.locator(".message.assistant")).toHaveCount(2);
+    await expect(panel.locator("textarea")).toBeEnabled();
+    expect(downloadedFiles).toEqual(["/files/approved.txt"]);
+    expect(providerRequests).toHaveLength(2);
+    expect(JSON.stringify(providerRequests[1])).toContain("学习笔记内容：");
+    expect(JSON.stringify(providerRequests[1])).not.toContain("私人草稿内容：");
+    await page.screenshot({ animations: "disabled", path: test.info().outputPath("store-side-chat-answer.png") });
+
+    // route.fulfill buffers the response. Mock only transport here so the browser receives
+    // a partial SSE frame and exercises the actual Port, abort, parser, and encrypted history paths.
+    await worker.evaluate(() => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async (input, init) => {
+        const url = input instanceof Request ? input.url : String(input);
+        if (url !== "https://api.example.test/v1/chat/completions") return originalFetch(input, init);
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content: "流式响应会先返回一部分内容，" } }] })}\n\n`));
+            init?.signal?.addEventListener("abort", () => controller.error(new DOMException("Aborted", "AbortError")), { once: true });
+          },
+        }), { headers: { "Content-Type": "text/event-stream" } });
+      };
+    });
+    await panel.locator("textarea").fill("请详细解释，我会在中途停止生成。");
+    await panel.locator("textarea").press("Enter");
+    await expect(consent).toBeVisible();
+    await expect(consent.getByRole("checkbox").nth(0)).not.toBeChecked();
+    await consent.locator("[data-action=confirm-attachments]").click();
+    await expect(panel.locator(".message.assistant").last()).toContainText("流式响应会先返回一部分内容，");
+    await expect(panel.locator("textarea")).toBeDisabled();
+    await panel.getByRole("button", { name: "停止生成", exact: true }).click();
+    await expect(panel).toContainText("已停止");
+    await expect(panel.locator("textarea")).toBeEnabled();
+    await expect(panel.locator(".message.assistant").last()).toContainText("流式响应会先返回一部分内容，");
+    await expect.poll(() => optionsPage.evaluate(async () => {
+      const response = await chrome.runtime.sendMessage({ type: "history:load", conversationId: "attachments-demo" });
+      return response.ok ? response.value?.messages.at(-1)?.status : null;
+    })).toBe("incomplete");
+    await page.reload();
+    await panel.getByRole("button", { name: "打开侧边对话" }).click();
+    await expect(panel.locator(".message.assistant")).toHaveCount(3);
+    await expect(panel.locator(".message.assistant").last()).toContainText("流式响应会先返回一部分内容，");
+    await expect(panel.locator(".message.assistant").last().locator(".incomplete")).toHaveText("未完成");
+    await expect(panel.locator("textarea")).toBeEnabled();
+    expect(downloadedFiles).toEqual(["/files/approved.txt"]);
   } finally {
     try { await context?.close(); }
     finally { await rm(userDataDir, { recursive: true, force: true }); }

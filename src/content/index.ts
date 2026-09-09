@@ -32,10 +32,13 @@ async function bootstrapImpl(): Promise<void> {
   if (!publicSettings.privacyAccepted) { delete (document as Document & { [BOOTSTRAP_KEY]?: Promise<void> })[BOOTSTRAP_KEY]; return; }
   const adapter = new ChatGptPageAdapter(document);
   let stream: { port: chrome.runtime.Port; requestId: string; conversationId: string } | null = null;
+  let attachmentController: AbortController | null = null;
   let generation = 0;
   let disposed = false;
   let settingsRefresh: Promise<void> | null = null;
   const disconnectStream = (abort = true) => {
+    attachmentController?.abort();
+    attachmentController = null;
     const active = stream;
     if (!active) return;
     stream = null;
@@ -44,6 +47,7 @@ async function bootstrapImpl(): Promise<void> {
   };
   const panel = new SidePanel(document, {
     onSend: (submission) => { void start(submission); },
+    onStop: () => { generation += 1; disconnectStream(); panel.stopRequest(); },
     onGeometryChange: (geometry) => { void request({ type: "ui:set-geometry", geometry }).catch(() => panel.setNotice("无法保存浮窗位置和大小。")); },
     onClear: () => clear(),
     onSettingsClose: () => {
@@ -88,14 +92,18 @@ async function bootstrapImpl(): Promise<void> {
     const descriptors = extractAttachmentDescriptors(elements);
     let attachments: import("../shared/types").PreparedAttachment[] = [];
     if (descriptors.length > 0) {
+      const controller = new AbortController();
+      attachmentController = controller;
       try {
-        attachments = await resolveAttachments(descriptors, publicSettings.config?.supportsImages === true, panel);
+        attachments = await resolveAttachments(descriptors, publicSettings.config?.supportsImages === true, panel, controller.signal);
       } catch (error) {
         if (!disposed && token === generation) panel.setError({ message: error instanceof Error ? error.message : "无法准备附件。", retryable: true });
         return;
+      } finally {
+        if (attachmentController === controller) attachmentController = null;
       }
     }
-    if (disposed || token !== generation || adapter.getConversationId() !== conversationId) { panel.resetRequest(); return; }
+    if (disposed || token !== generation || adapter.getConversationId() !== conversationId) return;
     disconnectStream(); const requestId = crypto.randomUUID(); let port: chrome.runtime.Port;
     try { port = chrome.runtime.connect({ name: "side-chat-stream" }); } catch { panel.setError({ message: "无法启动侧边对话请求。", retryable: true }); return; }
     stream = { port, requestId, conversationId };
@@ -135,11 +143,11 @@ function safeAttachmentUrl(value: string, origin: string): URL | null {
   } catch { return null; }
 }
 
-export async function fetchAttachment(descriptor: AttachmentDescriptor, origin: string, fetcher: typeof fetch = fetch): Promise<File | null> {
+export async function fetchAttachment(descriptor: AttachmentDescriptor, origin: string, fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<File | null> {
   if (!descriptor.url) return null;
   const url = safeAttachmentUrl(descriptor.url, origin); if (!url) return null;
   const sameOrigin = url.origin === origin;
-  const response = await fetcher(url, { credentials: sameOrigin ? "same-origin" : "omit" });
+  const response = await fetcher(url, { credentials: sameOrigin ? "same-origin" : "omit", ...(signal ? { signal } : {}) });
   if (!response.ok) return null;
   const declaredSize = Number(response.headers.get("content-length"));
   if (Number.isFinite(declaredSize) && declaredSize > 20 * 1024 * 1024) return null;
@@ -148,22 +156,33 @@ export async function fetchAttachment(descriptor: AttachmentDescriptor, origin: 
   return new File([blob], descriptor.name, { type: blob.type });
 }
 
-async function resolveAttachments(descriptors: AttachmentDescriptor[], supportsImages: boolean, panel: SidePanel) {
+async function resolveAttachments(descriptors: AttachmentDescriptor[], supportsImages: boolean, panel: SidePanel, signal: AbortSignal) {
+  const selected = await panel.confirmAttachments(descriptors.map((descriptor) => descriptor.name));
+  signal.throwIfAborted();
+  if (selected === undefined) throw new Error("已取消附件选择，未发送请求。");
   const prepared = [] as import("../shared/types").PreparedAttachment[];
   const missing: AttachmentDescriptor[] = [];
-  for (const descriptor of descriptors) {
+  for (const index of selected) {
+    signal.throwIfAborted();
+    const descriptor = descriptors[index]!;
     let file: File | null;
-    try { file = await fetchAttachment(descriptor, document.location.origin); } catch { file = null; }
+    try { file = await fetchAttachment(descriptor, document.location.origin, fetch, signal); } catch { file = null; }
+    signal.throwIfAborted();
     if (!file) { missing.push(descriptor); continue; }
     try { prepared.push(await prepareFile(file, descriptor.sourceMessageIndex, supportsImages)); }
     catch { missing.push(descriptor); }
   }
+  signal.throwIfAborted();
   if (missing.length === 0) return prepared;
   const replacements = await panel.resolveMissingAttachments(missing.map((descriptor) => descriptor.name));
+  signal.throwIfAborted();
   if (replacements === undefined) throw new Error("已取消附件选择，未发送请求。");
   if (replacements === null) return prepared;
   if (replacements.length !== missing.length) throw new Error("缺失的附件尚未全部选齐。");
-  for (const [index, file] of replacements.entries()) prepared.push(await prepareFile(file, missing[index]!.sourceMessageIndex, supportsImages));
+  for (const [index, file] of replacements.entries()) {
+    signal.throwIfAborted();
+    prepared.push(await prepareFile(file, missing[index]!.sourceMessageIndex, supportsImages));
+  }
   return prepared;
 }
 

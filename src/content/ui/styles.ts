@@ -80,7 +80,7 @@ form { flex-shrink:0; margin:0; padding:10px 16px 14px; }
 .composer:focus-within { border-color:var(--panel-accent); box-shadow:0 0 0 2px var(--panel-accent-soft); }
 .composer textarea { flex:1; min-width:0; width:100%; min-height:52px; max-height:min(180px,24cqh); padding:3px 0; resize:vertical; color:var(--panel-text); border:0; background:transparent; outline:0; font:inherit; }
 .composer textarea::placeholder { color:var(--panel-muted); }
-.composer [data-action=send] { width:34px; height:34px; padding:7px; border-radius:10px; color:var(--panel-on-accent); background:var(--panel-accent); }
+.composer [data-action=send],.composer [data-action=stop] { flex-shrink:0; width:34px; height:34px; padding:7px; border-radius:10px; color:var(--panel-on-accent); background:var(--panel-accent); }
 .composer [data-action=send]:disabled { opacity:1; background:var(--panel-line); color:var(--panel-muted); }
 .composer [data-action=send]:enabled:hover { filter:brightness(1.08); }
 .composer-hint { margin:6px 2px 0; color:var(--panel-muted); text-align:right; font-size:11px; }
@@ -88,10 +88,14 @@ form { flex-shrink:0; margin:0; padding:10px 16px 14px; }
 .controls label { display:flex; align-items:flex-start; gap:6px; font-size:11px; line-height:1.5; cursor:pointer; }
 .controls input { accent-color:var(--panel-accent); margin:2px 0; flex-shrink:0; }
 a { color:var(--panel-accent); text-underline-offset:3px; }
-dialog { max-width:calc(100% - 32px); max-height:calc(100% - 32px); overflow:auto; padding:22px; border:1px solid var(--panel-line); border-radius:16px; color:var(--panel-text); background:var(--panel-bg); box-shadow:var(--panel-shadow); font:inherit; }
+dialog { width:min(520px,calc(100vw - 32px)); max-width:calc(100% - 32px); max-height:calc(100% - 32px); overflow:auto; overflow-wrap:anywhere; padding:22px; border:1px solid var(--panel-line); border-radius:16px; color:var(--panel-text); background:var(--panel-bg); box-shadow:var(--panel-shadow); font:inherit; }
 dialog h2 { margin-top:0; font-size:17px; } dialog::backdrop { background:#0006; }
 dialog button { margin-top:10px; border-color:var(--panel-line); background:var(--panel-input); }
+dialog button + button { margin-left:8px; }
 dialog input { max-width:100%; } dialog [role=alert] { color:var(--panel-error); }
+.attachment-choices { display:grid; gap:10px; margin:16px 0; }
+.attachment-choices label { display:flex; align-items:flex-start; gap:8px; overflow-wrap:anywhere; }
+.attachment-choices input { flex-shrink:0; margin-top:5px; accent-color:var(--panel-accent); }
 @media (prefers-reduced-motion:reduce) { button,.composer { transition:none; } }
 @container side-chat (max-height:460px) {
   header { min-height:56px; padding-top:8px; padding-bottom:8px; }

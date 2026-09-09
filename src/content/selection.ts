@@ -1,14 +1,15 @@
 import { t } from "../shared/i18n";
 import type { QuoteReference } from "../shared/types";
 import { ChatGptPageAdapter } from "./page-adapter";
+import { isVisible } from "./extractor";
 import { watchPageTheme } from "../shared/theme";
 
 export function quoteFromRange(range: Range, adapter: ChatGptPageAdapter): QuoteReference | null {
-  const touchesEditable = [range.startContainer, range.endContainer].some((node) => {
+  const touchesUnsupportedContent = [range.startContainer, range.endContainer].some((node) => {
     const element = node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement;
-    return element?.closest('input, textarea, [contenteditable]:not([contenteditable="false"])');
+    return !element || !isVisible(element) || element.closest('input, textarea, [contenteditable]:not([contenteditable="false"])');
   });
-  if (touchesEditable) return null;
+  if (touchesUnsupportedContent) return null;
 
   const startMessage = adapter.findMessageElement(range.startContainer);
   const endMessage = adapter.findMessageElement(range.endContainer);
@@ -19,13 +20,9 @@ export function quoteFromRange(range: Range, adapter: ChatGptPageAdapter): Quote
   const sourceRole = startMessage.getAttribute("data-message-author-role");
   if (sourceRole !== "user" && sourceRole !== "assistant") return null;
 
-  const extraction = adapter.extractConversation();
-  if (!extraction.certain) return null;
-
   const candidates = adapter.getMessageElements();
   const sourceMessageIndex = candidates.indexOf(startMessage as HTMLElement);
-  const message = extraction.messages[sourceMessageIndex];
-  if (!message || message.index !== sourceMessageIndex || message.role !== sourceRole) return null;
+  if (sourceMessageIndex < 0) return null;
 
   return { text, sourceRole, sourceMessageIndex };
 }

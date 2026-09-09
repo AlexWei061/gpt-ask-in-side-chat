@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="440" height="280" viewBox="0 0 440 280">
+  <rect width="440" height="280" fill="#111827"/>
+  <circle cx="410" cy="30" r="150" fill="#17283e"/>
+  <circle cx="20" cy="280" r="160" fill="#162436"/>
+  <g transform="translate(32 31)">
+    <rect width="30" height="30" rx="8" fill="#fff"/>
+    <path d="M7 8h17v12H14l-5 5v-5H7z" fill="#111827"/>
+    <path d="M18 11h4v7h-4z" fill="#60a5fa"/>
+    <text x="42" y="22" fill="#fff" font-size="20" font-weight="600" font-family="PingFang SC, sans-serif">侧边对话助手</text>
+  </g>
+  <g transform="translate(33 90)">
+    <rect width="230" height="138" rx="14" fill="#f8fafc"/>
+    <path d="M20 26h133M20 45h184M20 83h138M20 100h166" fill="none" stroke="#c3cbd6" stroke-width="6" stroke-linecap="round"/>
+    <rect x="15" y="56" width="128" height="14" rx="4" fill="#bfdbfe"/>
+    <path d="M20 63h104" fill="none" stroke="#2563eb" stroke-width="4" stroke-linecap="round"/>
+  </g>
+  <path d="M177 154h26c14 0 14-28 28-28h14" fill="none" stroke="#60a5fa" stroke-width="3" stroke-linecap="round"/>
+  <g transform="translate(241 111)">
+    <rect x="0" y="5" width="165" height="128" rx="14" fill="#000" opacity=".2"/>
+    <rect width="165" height="128" rx="14" fill="#fff"/>
+    <path d="M0 37h165" stroke="#e2e8f0"/>
+    <circle cx="17" cy="19" r="4" fill="#187659"/>
+    <text x="29" y="23" fill="#202824" font-size="12" font-weight="600" font-family="PingFang SC, sans-serif">独立追问</text>
+    <rect x="40" y="49" width="110" height="21" rx="7" fill="#edf7f1"/>
+    <path d="M51 59h78M15 84h121M15 95h102" fill="none" stroke="#9fafa6" stroke-width="4" stroke-linecap="round"/>
+    <rect x="13" y="107" width="139" height="12" rx="6" fill="#f1f5f3"/>
+  </g>
+  <text x="33" y="260" fill="#c5d2e4" font-size="13" font-family="PingFang SC, sans-serif">选中文字 · 保留上下文 · 继续追问</text>
+</svg>

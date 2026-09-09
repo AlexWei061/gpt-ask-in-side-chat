@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ExtensionError } from "../src/shared/errors";
 import { streamChatCompletion, type StreamArgs } from "../src/background/provider";
 
@@ -173,7 +173,7 @@ describe("streamChatCompletion", () => {
     const controller = new AbortController();
     const abortError = new Error("request aborted");
     const stream = new ReadableStream<Uint8Array>({ pull: () => Promise.reject(abortError) });
-    controller.abort();
+    controller.abort(abortError);
     const error = await streamChatCompletion(args({
       fetcher: vi.fn(async () => streamResponse(stream)), signal: controller.signal,
     })).catch((reason: unknown) => reason);
@@ -237,5 +237,131 @@ describe("streamChatCompletion", () => {
     expect(error).toMatchObject({ code: "RATE_LIMITED", retryable: true });
     expect((error as Error).message).not.toContain("private cancellation failure");
     expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  describe("network inactivity", () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it("times out a pending connection and aborts its transport without aborting the caller", async () => {
+      const controller = new AbortController();
+      const settled = vi.fn();
+      const fetcher = vi.fn((_url: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      }));
+      void streamChatCompletion(args({ fetcher, signal: controller.signal })).then(settled, settled);
+
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(settled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toHaveBeenCalledWith(expect.objectContaining({ code: "NETWORK_FAILED", retryable: true, message: expect.stringContaining("超时") }));
+      expect(fetcher.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+      expect(controller.signal.aborted).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it.each([false, true])("times out a stalled read after partial content = %s even when transport cleanup hangs", async (partial) => {
+      const onDelta = vi.fn();
+      const settled = vi.fn();
+      const cancel = vi.fn(() => new Promise<void>(() => {}));
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          if (partial) controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'));
+        },
+        cancel,
+      });
+      void streamChatCompletion(args({ fetcher: vi.fn(async () => streamResponse(stream)), onDelta })).then(settled, settled);
+
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(settled).not.toHaveBeenCalled();
+      expect(onDelta).toHaveBeenCalledTimes(partial ? 1 : 0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toHaveBeenCalledWith(expect.objectContaining({ code: "NETWORK_FAILED", retryable: true, message: expect.stringContaining("超时") }));
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(stream.locked).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("starts a fresh read deadline after a slow connection", async () => {
+      let connected!: (response: Response) => void;
+      const settled = vi.fn();
+      const stream = new ReadableStream<Uint8Array>();
+      void streamChatCompletion(args({ fetcher: vi.fn(() => new Promise<Response>((resolve) => { connected = resolve; })) })).then(settled, settled);
+
+      await vi.advanceTimersByTimeAsync(45_000);
+      connected(streamResponse(stream));
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(settled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toHaveBeenCalledWith(expect.objectContaining({ code: "NETWORK_FAILED", retryable: true }));
+      expect(stream.locked).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("keeps a long stream alive as chunks arrive and clears the deadline at DONE", async () => {
+      let source!: ReadableStreamDefaultController<Uint8Array>;
+      const controller = new AbortController();
+      const stream = new ReadableStream<Uint8Array>({ start(value) { source = value; } });
+      const settled = vi.fn();
+      const onDelta = vi.fn();
+      void streamChatCompletion(args({ fetcher: vi.fn(async () => streamResponse(stream)), signal: controller.signal, onDelta })).then(settled, settled);
+
+      for (const content of [": heartbeat\n\n", 'data: {"choices":[{"delta":{"reasoning_content":"thinking","content":null}}]}\n\n', 'data: {"choices":[{"delta":{"content":"answer"}}]}\n\n']) {
+        await vi.advanceTimersByTimeAsync(45_000);
+        expect(settled).not.toHaveBeenCalled();
+        source.enqueue(new TextEncoder().encode(content));
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      await vi.advanceTimersByTimeAsync(45_000);
+      expect(settled).not.toHaveBeenCalled();
+      source.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toHaveBeenCalledWith("answer");
+      expect(onDelta).toHaveBeenCalledExactlyOnceWith("answer");
+      expect(vi.getTimerCount()).toBe(0);
+      expect(stream.locked).toBe(false);
+    });
+
+    it.each(["connection", "read"])("preserves user cancellation during a pending %s and clears the deadline", async (phase) => {
+      const controller = new AbortController();
+      const abortError = new DOMException("User stopped the request", "AbortError");
+      const settled = vi.fn();
+      const stream = new ReadableStream<Uint8Array>();
+      const fetcher = vi.fn((_url: string | URL | Request, init?: RequestInit) => phase === "read"
+        ? Promise.resolve(streamResponse(stream))
+        : new Promise<Response>((_resolve, reject) => { init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true }); }));
+      void streamChatCompletion(args({ fetcher, signal: controller.signal })).then(settled, settled);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      controller.abort(abortError);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toHaveBeenCalledWith(abortError);
+      expect(fetcher.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(stream.locked).toBe(false);
+    });
+
+    it.each(["data: [DONE]\n\n", "data: invalid\n\n"])("does not wait for hanging cleanup after %j", async (body) => {
+      const settled = vi.fn();
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(new TextEncoder().encode(body)); },
+        cancel: () => new Promise<void>(() => {}),
+      });
+      void streamChatCompletion(args({ fetcher: vi.fn(async () => streamResponse(stream)) })).then(settled, settled);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toHaveBeenCalledOnce();
+      expect(settled).toHaveBeenCalledWith(body.includes("DONE") ? "" : expect.objectContaining({ code: "PROTOCOL_FAILED" }));
+      expect(stream.locked).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("returns a sanitized HTTP error even when response-body cancellation hangs", async () => {
+      const settled = vi.fn();
+      const response = new Response(new ReadableStream<Uint8Array>({ cancel: () => new Promise<void>(() => {}) }), { status: 429 });
+      void streamChatCompletion(args({ fetcher: vi.fn(async () => response) })).then(settled, settled);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toHaveBeenCalledWith(expect.objectContaining({ code: "RATE_LIMITED", retryable: true }));
+      expect(vi.getTimerCount()).toBe(0);
+    });
   });
 });

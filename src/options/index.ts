@@ -22,7 +22,7 @@ app.innerHTML = `
   </header>
   <form id="settings">
     <section class="settings-card" aria-labelledby="connection-title">
-      <div class="section-heading"><h2 id="connection-title">模型连接</h2><p>连接你使用的模型服务。</p></div>
+      <div class="section-heading"><h2 id="connection-title">模型连接</h2><p>需自备模型接口和 API 密钥，调用可能产生服务商费用。</p></div>
       <div class="fields">
         <label>接口地址（Base URL） <input id="base-url" type="url" required placeholder="https://provider.example/v1"></label>
         <div class="field-row">
@@ -30,22 +30,29 @@ app.innerHTML = `
           <label>上下文窗口（词元） <input id="context-window" type="number" min="1024" max="10000000" step="1" required></label>
         </div>
         <label class="check capability"><input id="images" type="checkbox"> 模型支持图片输入</label>
-        <label>本次 Chrome 会话的 API 密钥 <input id="api-key" type="password" autocomplete="off" spellcheck="false"></label>
+        <label>API 密钥 <input id="api-key" type="password" autocomplete="off" spellcheck="false"></label>
       </div>
+      <details class="setup-help"><summary>这些设置怎么填？</summary>
+        <p>在你选择的模型服务商控制台创建 API 密钥，并查阅其接口文档。接口需兼容流式 Chat Completions；地址形如 https://provider.example/v1，扩展会追加 /chat/completions。示例地址不可直接使用。</p>
+        <p>模型填写服务商提供的模型 ID；上下文窗口填写该模型支持的词元上限，仅在模型支持图片时勾选图片输入。</p>
+        <p>先保存并授权，再测试连接。测试会发送一条简短提示，也可能产生调用费用。API 密钥保存在本机，扩展重新加载或 Chrome 重启后仍保留。</p>
+      </details>
     </section>
     <section class="settings-card disclosure" aria-labelledby="disclosure-title">
       <h2 id="disclosure-title">使用前说明</h2>
-      <p>打开侧边对话时，扩展会统计当前 ChatGPT 页面中可见的消息。发送侧边问题时，扩展会读取这些消息，并将它们、所选引文、问题以及你明确批准的附件，直接发送到你配置的模型接口。</p>
+      <p>使用侧边对话时，扩展会统计当前 ChatGPT 页面中的消息节点；划词时仅在本地检查来源并读取选中文字。发送侧边问题时，扩展会读取页面可访问的对话，并将它们、所选引文、问题、侧边历史以及你逐次勾选确认的附件，直接发送到你配置的模型接口。</p>
       <p>本扩展没有开发者后端，不会向开发者发送你的对话、API 密钥、侧边对话记录或使用统计。你选择的模型服务商将按其条款和隐私政策处理提交的数据。</p>
+      <p>测试连接会向同一接口发送固定测试提示；如果你启用旧上下文压缩，超限时还会向该接口发送额外的压缩请求。<a href="privacy.html" target="_blank" rel="noopener">阅读完整隐私政策</a></p>
       <label class="check consent"><input id="privacy" type="checkbox"> 我已了解并同意上述数据使用方式。</label>
     </section>
     <div class="actions form-actions"><button type="submit">保存并授权接口访问</button><button id="test" type="button">测试连接</button></div>
   </form>
   <section class="settings-card data-controls" aria-labelledby="data-title">
     <h2 id="data-title">本地数据管理</h2>
-    <p>API 密钥仅保存在本次 Chrome 会话中。侧边对话记录加密保存在当前浏览器本地。</p>
-    <div class="actions"><button id="forget" type="button">忘记本次会话的 API 密钥</button><button id="clear" class="danger" type="button">清空全部侧边对话记录</button></div>
+    <p>API 密钥保存在本机，扩展重新加载或 Chrome 重启后仍保留，可点击下方按钮移除。侧边对话记录加密保存在当前浏览器本地。</p>
+    <div class="actions"><button id="forget" type="button">忘记已保存的 API 密钥</button><button id="clear" class="danger" type="button">清空全部侧边对话记录</button></div>
   </section>
+  <p class="usage-hint">配置完成后，刷新已有 ChatGPT 页面，打开一个已保存的对话，选中文字即可提问。首次使用也可点击页面上的「侧边对话」浮条。暂不支持分享页等非 /c/ 路径。</p>
   <p id="status" role="status" aria-live="polite"></p>`;
 
 const form = required<HTMLFormElement>("#settings");
@@ -117,7 +124,7 @@ async function initialize(): Promise<void> {
     loadedBaseUrl = config.baseUrl;
   }
   apiKey.value = "";
-  apiKey.placeholder = hasSessionKey ? "已设置密钥，留空即可保留" : "请输入本次 Chrome 会话使用的密钥";
+  apiKey.placeholder = hasSessionKey ? "已设置密钥，留空即可保留" : "请输入 API 密钥";
 }
 
 form.addEventListener("submit", (event) => {
@@ -133,17 +140,17 @@ form.addEventListener("submit", (event) => {
     if (enteredKey) { await send({ type: "key:set", apiKey: enteredKey }); hasSessionKey = true; apiKey.value = ""; }
     else if (loadedBaseUrl !== null && loadedBaseUrl !== config.baseUrl) hasSessionKey = false;
     loadedBaseUrl = config.baseUrl;
-    apiKey.placeholder = hasSessionKey ? "已设置密钥，留空即可保留" : "请输入本次 Chrome 会话使用的密钥";
+    apiKey.placeholder = hasSessionKey ? "已设置密钥，留空即可保留" : "请输入 API 密钥";
     const removedOldPermission = await removeUnusedEndpointPermissions(newPattern);
     if (!removedOldPermission) show("设置已保存，但无法移除旧接口的访问权限。", "error");
-    else show(hasSessionKey ? "本次 Chrome 会话的设置已保存。" : "设置已保存。请先输入 API 密钥，再测试连接或提问。");
+    else show(hasSessionKey ? "设置已保存，API 密钥会保留在本机。请测试连接，再刷新已有 ChatGPT 页面开始使用。" : "设置已保存。请先输入 API 密钥，再测试连接或提问。");
   });
 });
 
 required<HTMLButtonElement>("#test").addEventListener("click", () => void run(async () => { await send({ type: "provider:test" }); show("连接成功。"); }));
 required<HTMLButtonElement>("#forget").addEventListener("click", () => {
-  if (!(document.defaultView?.confirm("确认忘记本次 Chrome 会话的 API 密钥吗？") ?? true)) return;
-  void run(async () => { await send({ type: "key:forget" }); hasSessionKey = false; apiKey.value = ""; apiKey.placeholder = "请输入本次 Chrome 会话使用的密钥"; show("已忘记本次会话的 API 密钥。"); });
+  if (!(document.defaultView?.confirm("确认移除本机保存的 API 密钥吗？") ?? true)) return;
+  void run(async () => { await send({ type: "key:forget" }); hasSessionKey = false; apiKey.value = ""; apiKey.placeholder = "请输入 API 密钥"; show("已忘记本机保存的 API 密钥。"); });
 });
 required<HTMLButtonElement>("#clear").addEventListener("click", () => {
   if (!(document.defaultView?.confirm("确认删除本地保存的全部侧边对话记录吗？") ?? true)) return;

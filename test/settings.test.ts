@@ -129,7 +129,43 @@ describe("provider settings", () => {
     });
   });
 
-  it("binds a session key to its current provider origin", async () => {
+  it("keeps a saved key after extension reload or browser restart clears session storage", async () => {
+    const config = {
+      baseUrl: "https://api.example.com/v1",
+      model: "model-a",
+      contextWindowTokens: 128000,
+      supportsImages: false,
+    };
+    await saveProviderConfig(config, true);
+    await setSessionKey("secret");
+
+    session = createStorageMock();
+    Object.assign(chrome.storage, { session });
+    vi.resetModules();
+    const reloaded = await import("../src/background/settings");
+
+    await expect(reloaded.loadInternalSettings()).resolves.toEqual({ config, privacyAccepted: true, apiKey: "secret" });
+    expect(reloaded.publicSettings(await reloaded.loadInternalSettings())).toEqual({ config, privacyAccepted: true, hasSessionKey: true });
+  });
+
+  it("forgets the persisted key without removing provider settings or UI preferences", async () => {
+    const config = {
+      baseUrl: "https://api.example.com/v1",
+      model: "model-a",
+      contextWindowTokens: 128000,
+      supportsImages: false,
+    };
+    await saveProviderConfig(config, true);
+    await setSessionKey("secret");
+    await saveWindowGeometry({ width: 500, height: 600, right: 20, bottom: 20 });
+
+    await forgetSessionKey();
+    expect(local.data).not.toHaveProperty("provider-api-key");
+    await expect(loadInternalSettings()).resolves.toEqual({ config, privacyAccepted: true, apiKey: null });
+    await expect(loadUiPreferences()).resolves.toEqual({ windowGeometry: { width: 500, height: 600, right: 20, bottom: 20 } });
+  });
+
+  it("binds a saved key to its current provider origin", async () => {
     const providerA = {
       baseUrl: "https://a.example.com/v1",
       model: "model-a",
@@ -144,7 +180,7 @@ describe("provider settings", () => {
     await expect(loadInternalSettings()).resolves.toMatchObject({ config: providerB, apiKey: null });
     await setSessionKey("key-b");
     await expect(loadInternalSettings()).resolves.toMatchObject({ apiKey: "key-b" });
-    expect(session.data["provider-api-key"]).toEqual({ apiKey: "key-b", providerBaseUrl: "https://b.example.com/v1" });
+    expect(local.data["provider-api-key"]).toEqual({ apiKey: "key-b", providerBaseUrl: "https://b.example.com/v1" });
   });
 
   it("binds keys to the complete provider endpoint but not the selected model", async () => {
@@ -177,7 +213,7 @@ describe("provider settings", () => {
     await expect(loadInternalSettings()).resolves.toMatchObject({ apiKey: " secret " });
   });
 
-  it("restricts storage and manages only the expected local and session keys", async () => {
+  it("restricts local storage before saving a key and removes it on request", async () => {
     const config = {
       baseUrl: "https://api.example.com/v1",
       model: "model-a",
@@ -191,12 +227,25 @@ describe("provider settings", () => {
     await forgetSessionKey();
 
     expect(local.setAccessLevel).toHaveBeenCalledWith({ accessLevel: "TRUSTED_CONTEXTS" });
-    expect(session.setAccessLevel).toHaveBeenCalledWith({ accessLevel: "TRUSTED_CONTEXTS" });
     expect(local.set).toHaveBeenCalledWith({ "provider-config": config, "privacy-accepted": true });
-    expect(session.set).toHaveBeenCalledWith({
+    expect(local.set).toHaveBeenCalledWith({
       "provider-api-key": { apiKey: "secret", providerBaseUrl: "https://api.example.com/v1" },
     });
-    expect(session.remove).toHaveBeenCalledWith("provider-api-key");
+    expect(local.remove).toHaveBeenCalledWith("provider-api-key");
+    expect(session.set).not.toHaveBeenCalled();
+  });
+
+  it("does not persist a key if restricting storage access fails", async () => {
+    await saveProviderConfig({
+      baseUrl: "https://api.example.com/v1",
+      model: "model-a",
+      contextWindowTokens: 128000,
+      supportsImages: false,
+    }, true);
+    local.setAccessLevel.mockRejectedValueOnce(new Error("access restriction failed"));
+
+    await expect(setSessionKey("secret")).rejects.toThrow("access restriction failed");
+    expect(local.data).not.toHaveProperty("provider-api-key");
   });
 
   it("propagates storage errors", async () => {

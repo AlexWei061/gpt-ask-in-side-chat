@@ -1,38 +1,45 @@
-# Side Chat Companion Privacy Policy
+# 侧边对话助手隐私政策
 
-Last updated: September 4, 2026
+最后更新：2026 年 9 月 9 日
 
-Side Chat Companion has one purpose: let you ask a separate AI model questions about text selected in your current ChatGPT conversation while keeping one local side-chat history for that conversation.
+侧边对话助手是独立项目，与 OpenAI 无隶属关系，未获其背书。本扩展的单一用途是在当前 ChatGPT 对话旁打开独立问答窗口，使用你配置的模型接口回答问题，并按 ChatGPT 对话保存本地侧边记录。使用前需要自备兼容的模型接口和 API 密钥；模型服务商可能另行收费。
 
-## Data handled
+## 处理哪些数据、何时处理
 
-The extension handles the following only to provide that feature. It counts visible messages when you open the side chat, and reads their contents when you submit a question:
+你需要先在设置页阅读并同意数据使用说明，扩展才会处理对话内容。
 
-- Messages and links visible in the current ChatGPT conversation when you submit a side-chat question.
-- The text you select, your side-chat question, and the model response.
-- Files shown in the conversation that the extension can read, or replacement files that you explicitly select. Supported files are processed locally before submission.
-- The API key and model endpoint that you provide.
+- **打开窗口或选择文字时**：在本地识别当前对话、检查页面中的消息结构和数量，并读取你选中的引文；不会因为打开窗口或划词而向模型服务商发送对话。
+- **发送问题时**：读取当前页面可访问的用户和助手消息正文及其中的链接，连同选中的引文（如有）、侧边问题和当前对话的侧边历史，准备模型请求。
+- **附件**：列出当前对话中可识别附件的名称，供你逐个选择。只有确认发送的附件才会被读取或下载并在本地处理；无法读取时，你可以自行选择替代文件或跳过。文本和 PDF 会提取为文字；图片以图片数据提交。未选择附件的文件内容不会被读取或发送；其名称或页面中的链接仍可能作为对话正文的一部分提交。
+- **模型配置**：处理你填写的接口地址、模型名称、上下文窗口、图片支持选项和 API 密钥，以连接该服务。
+- **本地记录与偏好**：保存侧边问题、引文、模型回答、对话标识和时间，以及窗口位置、大小和数据说明同意状态。
 
-The extension does not collect unrelated browsing activity, analytics, advertising identifiers, or telemetry.
+本扩展不收集无关的浏览记录、广告标识、使用统计或遥测数据。当前仅支持 `/c/<会话 ID>` 对话，不保证读取尚未加载或被页面隐藏的消息。单个附件最大为 20 MiB；PDF 仅提取已有文字，不提供扫描件 OCR。
 
-## How data is used and shared
+## 数据如何使用和发送
 
-When you submit a question, the extension sends the relevant conversation data directly from your browser to the model API endpoint you configured. This transfer is necessary to generate the side-chat answer. The extension developer does not operate a server for this product and does not receive your conversation, attachments, API key, side-chat history, or model response.
+你发送问题并完成必要的附件确认后，扩展会直接从浏览器向你配置并授权的模型 API 发送上述请求数据，并使用 API 密钥进行身份验证。模型返回的回答显示在侧边窗口中。开发者没有为本产品运行接收这些数据的后端，也不会接收你的对话、附件、API 密钥、侧边历史或回答。
 
-Your chosen model provider receives and processes submitted data under its own terms and privacy policy. Use only an endpoint and provider you trust. The developer does not sell data, use it for advertising or credit decisions, or permit human review of it.
+点击「测试连接」会向同一接口发送固定测试提示和 API 密钥，不附带 ChatGPT 对话或附件。若你主动启用旧上下文压缩，且请求超出上下文预算，扩展会额外向同一接口提交需要压缩的主对话内容，再使用摘要完成问答；这些请求也可能产生服务商费用。确认读取页面附件时，浏览器可能向该附件的原始地址请求文件。
 
-## Storage and security
+你选择的模型服务商依据其自己的条款和隐私政策处理提交的数据，包括可能的保存、审核或训练用途。本扩展不会替你更改服务商的数据设置，请在发送前了解该服务商的规则。
 
-The API key is kept only in Chrome session storage, bound to the configured endpoint, and is not displayed again after saving. Side-chat histories are encrypted with AES-GCM and stored in extension-owned IndexedDB on your device. The extension contains no remote executable code. Provider traffic must use HTTPS, except for an explicitly configured loopback endpoint on `localhost` or `127.0.0.1`.
+## 本地保存与安全
 
-Local side-chat history remains until you clear the current history, clear all histories, or remove the extension. The API key is cleared when Chrome's extension session storage is cleared. A model provider may retain submitted data according to its own policy; the extension developer cannot delete data held by that provider.
+- API 密钥保存在本机的 Chrome 扩展本地存储中，与配置的接口绑定，保存后不回显，不提供跨设备同步。扩展重新加载或 Chrome 重启后仍保留；点击「忘记已保存的 API 密钥」、清除扩展数据或卸载扩展后移除。
+- 模型配置、同意状态和窗口偏好保存在扩展的本地存储中。
+- 侧边对话记录使用 AES-GCM 加密，存放在当前浏览器的 IndexedDB 中；解密密钥也保存在本设备的扩展存储内。不提供云端备份或跨设备同步。
+- 远程模型接口必须使用 HTTPS；只有明确配置的 `localhost` 或 `127.0.0.1` 回环接口允许 HTTP。
+- 扩展执行的代码随安装包提供，不从远程下载并执行代码。
 
-## Your controls
+本地侧边记录会保留到你清空相应记录、清除扩展数据或卸载扩展。服务商已收到的数据可能按其规则继续保留；清空本地记录或停止生成不会撤回已发出的数据，也不会删除服务商持有的数据。
 
-You can forget the session API key and clear all encrypted side-chat histories from the extension settings. You can clear one conversation's side-chat history from its floating window. You may skip any attachment the extension cannot read.
+## 你的控制方式
 
-For support or privacy requests, use the support contact published with the Chrome Web Store listing.
+你可以在每次发送前选择要提交的附件，取消附件确认，或跳过无法读取的附件；也可以在生成过程中停止请求。在浮窗中可清空当前对话的侧边记录，在设置页可清空全部侧边记录或忘记已保存的 API 密钥。你可以通过 Chrome 扩展管理页撤销网站访问权限、停用或卸载扩展。
 
-## Limited Use
+支持与隐私请求请使用 Chrome 应用商店详情页公布的支持联系方式。请勿在公开反馈中附上 API 密钥或私密对话。
 
-The extension's use and transfer of user data is limited to providing its single user-facing side-chat purpose. User data is not used or transferred for personalized advertising, retargeting, unrelated profiling, sale to data brokers, or other unrelated purposes.
+## 限定用途（Limited Use）
+
+本扩展对用户数据的使用和传输仅限于上述面向用户的侧边问答用途。开发者不会出售用户数据，不会将其用于广告、再营销、无关画像、信贷或借贷决策，也不会安排人工查看用户对话。模型服务商对收到数据的处理适用其自己的政策。

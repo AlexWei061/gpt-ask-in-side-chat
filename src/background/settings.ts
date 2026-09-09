@@ -9,7 +9,7 @@ const WINDOW_GEOMETRY_KEY = "window-geometry";
 const MAX_CONTEXT_WINDOW_TOKENS = 10_000_000;
 const DEFAULT_WINDOW_GEOMETRY: WindowGeometry = { width: 420, height: 560, right: 20, bottom: 20 };
 
-type SessionKey = {
+type StoredKey = {
   apiKey: string;
   providerBaseUrl: string;
 };
@@ -51,28 +51,26 @@ export function normalizeProviderConfig(value: unknown): ProviderConfig {
   };
 }
 
-function readSessionKey(value: unknown, config: ProviderConfig | null): string | null {
+function readStoredKey(value: unknown, config: ProviderConfig | null): string | null {
   if (!value || typeof value !== "object" || !config) return null;
-  const sessionKey = value as Partial<SessionKey>;
+  const storedKey = value as Partial<StoredKey>;
   if (
-    typeof sessionKey.apiKey !== "string"
-    || !sessionKey.apiKey.trim()
-    || typeof sessionKey.providerBaseUrl !== "string"
-    || sessionKey.providerBaseUrl !== config.baseUrl
+    typeof storedKey.apiKey !== "string"
+    || !storedKey.apiKey.trim()
+    || typeof storedKey.providerBaseUrl !== "string"
+    || storedKey.providerBaseUrl !== config.baseUrl
   ) {
     return null;
   }
-  return sessionKey.apiKey;
+  return storedKey.apiKey;
 }
 
 export async function restrictStorageAccess(): Promise<void> {
   await chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
-  await chrome.storage.session.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
 }
 
 export async function loadInternalSettings(): Promise<InternalSettings> {
-  const local = await chrome.storage.local.get([CONFIG_KEY, PRIVACY_KEY]);
-  const session = await chrome.storage.session.get(API_KEY);
+  const local = await chrome.storage.local.get([CONFIG_KEY, PRIVACY_KEY, API_KEY]);
   let config: ProviderConfig | null = null;
   try {
     config = normalizeProviderConfig(local[CONFIG_KEY]);
@@ -82,7 +80,7 @@ export async function loadInternalSettings(): Promise<InternalSettings> {
   return {
     config,
     privacyAccepted: local[PRIVACY_KEY] === true,
-    apiKey: readSessionKey(session[API_KEY], config),
+    apiKey: readStoredKey(local[API_KEY], config),
   };
 }
 
@@ -118,13 +116,14 @@ export async function setSessionKey(apiKey: string): Promise<void> {
   }
   const local = await chrome.storage.local.get(CONFIG_KEY);
   const config = normalizeProviderConfig(local[CONFIG_KEY]);
-  await chrome.storage.session.set({
+  await restrictStorageAccess();
+  await chrome.storage.local.set({
     [API_KEY]: { apiKey, providerBaseUrl: config.baseUrl },
   });
 }
 
 export async function forgetSessionKey(): Promise<void> {
-  await chrome.storage.session.remove(API_KEY);
+  await chrome.storage.local.remove(API_KEY);
 }
 
 function normalizedNumber(value: unknown, fallback: number, minimum: number): number {

@@ -57,6 +57,38 @@ describe("attachment preparation", () => {
 });
 
 describe("attachment descriptors", () => {
+  it("finds sibling attachment cards in single-message articles while preserving message indexes", () => {
+    document.body.innerHTML = `<main>
+      <article><div data-testid="attachment"><a download="brief.txt" href="/brief">brief.txt</a></div><div data-message-author-role="user"><p>First message</p></div><div data-testid="attachment" data-filename="missing.pdf">missing.pdf</div></article>
+      <article><div data-message-author-role="assistant"><p>Second message</p></div><a download="result.txt" href="/result">result.txt</a><div hidden data-testid="attachment" data-filename="hidden.txt">hidden.txt</div></article>
+    </main>`;
+    expect(extractAttachmentDescriptors(Array.from(document.querySelectorAll("[data-message-author-role]")))).toEqual([
+      { name: "brief.txt", sourceMessageIndex: 0, url: "http://localhost:3000/brief" },
+      { name: "missing.pdf", sourceMessageIndex: 0, url: null },
+      { name: "result.txt", sourceMessageIndex: 1, url: "http://localhost:3000/result" },
+    ]);
+  });
+
+  it("keeps attachments within their own message when an article contains multiple roles", () => {
+    document.body.innerHTML = `<article>
+      <div data-testid="attachment" data-filename="unattributed.txt">unattributed.txt</div>
+      <div data-message-author-role="user"><a download="question.txt" href="/question">question.txt</a></div>
+      <div data-message-author-role="assistant"><a download="answer.txt" href="/answer">answer.txt</a></div>
+    </article>`;
+    expect(extractAttachmentDescriptors(Array.from(document.querySelectorAll("[data-message-author-role]")))).toEqual([
+      { name: "question.txt", sourceMessageIndex: 0, url: "http://localhost:3000/question" },
+      { name: "answer.txt", sourceMessageIndex: 1, url: "http://localhost:3000/answer" },
+    ]);
+  });
+
+  it("does not widen a hidden message or cross a role-bearing article boundary", () => {
+    document.body.innerHTML = `<article><a download="hidden-message.txt" href="/hidden-message">hidden-message.txt</a><div hidden data-message-author-role="user">Hidden</div></article>
+      <article data-message-author-role="assistant"><a download="outer.txt" href="/outer">outer.txt</a><div id="inner" data-message-author-role="user"><a download="inner.txt" href="/inner">inner.txt</a></div></article>`;
+    expect(extractAttachmentDescriptors([document.querySelector("[hidden]")!, document.querySelector("#inner")!])).toEqual([
+      { name: "inner.txt", sourceMessageIndex: 1, url: "http://localhost:3000/inner" },
+    ]);
+  });
+
   it("uses captured-message indexes, skips hidden nodes, and de-duplicates nested representations", () => {
     document.body.innerHTML = `<article><a download="one.txt" href="/one">One</a><div data-testid="attachment" hidden><a download="hidden.txt" href="/hidden">Hidden</a></div></article><article><div data-testid="attachment"><a download="two.txt" href="/two">Two</a></div></article>`;
     const elements = Array.from(document.querySelectorAll("article"));

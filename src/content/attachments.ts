@@ -76,7 +76,13 @@ export function extractAttachmentDescriptors(elements: Element[]): AttachmentDes
   const descriptors: AttachmentDescriptor[] = [];
   const seen = new Set<string>();
   elements.forEach((message, sourceMessageIndex) => {
-    const nodes = [message, ...Array.from(message.querySelectorAll("a[download], [data-testid*='attachment']"))];
+    if (!isVisible(message)) return;
+    const article = message.closest("article");
+    const roles = article?.querySelectorAll("[data-message-author-role]");
+    const root = article && !article.hasAttribute("data-message-author-role") && roles?.length === 1 && roles[0] === message
+      ? article
+      : message;
+    const nodes = [root, ...Array.from(root.querySelectorAll("a[download], [data-testid*='attachment']"))];
     for (const node of nodes) {
       if (!isVisible(node)) continue;
       const anchor = node instanceof HTMLAnchorElement && node.hasAttribute("download") ? node : node.querySelector<HTMLAnchorElement>("a[download]");

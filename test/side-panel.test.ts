@@ -176,6 +176,61 @@ describe("side panel", () => {
     panel.destroy();
   });
 
+  it.each([
+    ["opening", (panel: SidePanel) => panel.open(quote), "selected words"],
+    ["messages", (panel: SidePanel) => panel.setMessages(messages), "saved"],
+    ["errors", (panel: SidePanel) => panel.setError({ message: "请刷新页面", retryable: false }), "请刷新页面"],
+    ["notices", (panel: SidePanel) => panel.setNotice("已停止"), "已停止"],
+  ] as const)("renders %s with its original resource URL after the extension context expires", (_name, update, expected) => {
+    const getURL = vi.fn((path: string) => `chrome-extension://test-extension/${path}`);
+    vi.stubGlobal("chrome", { runtime: { getURL } });
+    const panel = new SidePanel(document, { onSend: vi.fn() });
+    try {
+      panel.setConversation("c", []); panel.open(quote);
+      const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+      const callsBeforeReload = getURL.mock.calls.length;
+      getURL.mockImplementation(() => { throw new Error("Extension context invalidated."); });
+      expect(() => update(panel)).not.toThrow();
+      expect(root.textContent).toContain(expected);
+      expect(root.querySelector<HTMLLinkElement>("link[data-katex-style]")?.href)
+        .toBe("chrome-extension://test-extension/katex/katex.min.css");
+      expect(getURL).toHaveBeenCalledTimes(callsBeforeReload);
+    } finally {
+      panel.destroy(); vi.unstubAllGlobals();
+    }
+  });
+
+  it("opens settings with the original resource URL and current theme after the extension context expires", async () => {
+    const getURL = vi.fn((path: string) => `chrome-extension://test-extension/${path}`);
+    vi.stubGlobal("chrome", { runtime: { getURL } });
+    vi.spyOn(HTMLIFrameElement.prototype, "src", "set").mockImplementation(function (this: HTMLIFrameElement, value: string) { this.dataset.testSrc = value; });
+    const originalTheme = document.documentElement.dataset.theme;
+    document.documentElement.dataset.theme = "light";
+    const panel = new SidePanel(document, { onSend: vi.fn() });
+    try {
+      panel.open(quote);
+      const host = document.querySelector<HTMLElement>("[data-side-chat-host]")!;
+      const root = host.shadowRoot!;
+      const callsBeforeReload = getURL.mock.calls.length;
+      getURL.mockImplementation(() => { throw new Error("Extension context invalidated."); });
+      root.querySelector<HTMLButtonElement>("[data-action=settings]")!.click();
+      expect(root.querySelector("iframe")?.dataset.testSrc)
+        .toBe("chrome-extension://test-extension/options.html?embedded=1&theme=light");
+      document.documentElement.dataset.theme = "dark";
+      await vi.waitFor(() => expect(host.dataset.sideChatTheme).toBe("dark"));
+      root.querySelector<HTMLButtonElement>("[data-action=settings]")!.click();
+      expect(root.querySelector("[data-active-quote]")?.textContent).toContain(quote.text);
+      root.querySelector<HTMLButtonElement>("[data-action=settings]")!.click();
+      expect(root.querySelector("iframe")?.dataset.testSrc)
+        .toBe("chrome-extension://test-extension/options.html?embedded=1&theme=dark");
+      expect(getURL).toHaveBeenCalledTimes(callsBeforeReload);
+    } finally {
+      panel.destroy(); vi.unstubAllGlobals();
+      if (originalTheme === undefined) delete document.documentElement.dataset.theme;
+      else document.documentElement.dataset.theme = originalTheme;
+    }
+  });
+
   it("sends with Enter but leaves Shift+Enter and IME confirmation alone", () => {
     const onSend = vi.fn(); const panel = new SidePanel(document, { onSend });
     panel.setConversation("c", []); panel.open(quote);
@@ -216,7 +271,7 @@ describe("side panel", () => {
     panel.open(quote, { capturedMessages: 5, endpointOrigin: "https://api.deepseek.com", model: "deepseek-v4-flash", contextWindowTokens: 1_000_000 });
     const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
     expect(root.textContent).toContain("侧边对话");
-    expect(root.textContent).toContain("已读取 5 条消息");
+    expect(root.textContent).toContain("页面消息：5 条");
     expect(root.querySelector(".message.user > .message-content")).toBeTruthy();
     expect(root.querySelector(".message.assistant > .message-content")).toBeTruthy();
     expect(root.querySelector(".composer")).toBeTruthy();
@@ -328,7 +383,7 @@ describe("side panel", () => {
     panel.setConversation("conversation", []);
     panel.open(quote, { capturedMessages: 7, endpointOrigin: "https://api.example.com", model: "model-a", contextWindowTokens: 128000 });
     let text = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!.textContent ?? "";
-    expect(text).toContain("已读取 7 条消息"); expect(text).toContain("https://api.example.com"); expect(text).toContain("model-a"); expect(text).toContain("128,000");
+    expect(text).toContain("页面消息：7 条"); expect(text).toContain("https://api.example.com"); expect(text).toContain("model-a"); expect(text).toContain("128,000");
     panel.setAccepted(2345);
     text = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!.textContent ?? "";
     expect(text).toContain("2,345");
@@ -636,6 +691,67 @@ describe("side panel", () => {
     expect(root.querySelector(".status")).toBeNull();
     expect(root.querySelector("form")).toBeNull();
     panel.destroy();
+  });
+
+  it("keeps stopped retries in the visible history without duplicating the question", () => {
+    const panel = new SidePanel(document, { onSend: vi.fn() });
+    panel.setConversation("c", [
+      { id: "u", role: "user", content: "question", quote, status: "complete", createdAt: "" },
+      { id: "a", role: "assistant", content: "old incomplete", status: "incomplete", createdAt: "" },
+    ]);
+    panel.open(quote);
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    const input = root.querySelector<HTMLTextAreaElement>("textarea")!;
+    input.value = "question"; input.dispatchEvent(new Event("input"));
+    root.querySelector<HTMLFormElement>("form")!.requestSubmit();
+    panel.setAccepted(10); panel.appendDelta("new incomplete"); panel.stopRequest();
+    panel.setQuote({ ...quote, text: "new quote" });
+    expect(root.querySelectorAll(".message.user")).toHaveLength(1);
+    expect(root.querySelectorAll(".message.assistant")).toHaveLength(1);
+    expect(root.querySelector(".messages")!.textContent).toContain("new incomplete");
+    expect(root.querySelector(".messages")!.textContent).not.toContain("old incomplete");
+    panel.destroy();
+  });
+
+  it("does not add a canceled preparation to history", () => {
+    const panel = new SidePanel(document, { onSend: vi.fn() });
+    panel.setConversation("c", []); panel.open(quote);
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    const input = root.querySelector<HTMLTextAreaElement>("textarea")!;
+    input.value = "unsent"; input.dispatchEvent(new Event("input"));
+    root.querySelector<HTMLFormElement>("form")!.requestSubmit();
+    panel.stopRequest();
+    expect(root.querySelectorAll(".message")).toHaveLength(0);
+    expect(root.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("unsent");
+    panel.destroy();
+  });
+
+  it("confirms unchecked attachments and safely cancels when the conversation changes", async () => {
+    const panel = new SidePanel(document, { onSend: vi.fn() });
+    const pending = panel.confirmAttachments(["<img src=x>", "two.txt"]);
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    expect(root.querySelector("dialog img")).toBeNull();
+    expect(root.querySelector("dialog")!.textContent).toContain("<img src=x>");
+    const choices = root.querySelectorAll<HTMLInputElement>("dialog input");
+    expect([...choices].every((choice) => !choice.checked)).toBe(true);
+    choices[1]!.checked = true;
+    root.querySelector<HTMLButtonElement>("[data-action=confirm-attachments]")!.click();
+    await expect(pending).resolves.toEqual([1]);
+    const canceled = panel.confirmAttachments(["one.txt"]);
+    panel.setConversation("other", []);
+    await expect(canceled).resolves.toBeUndefined();
+    expect(root.querySelector("dialog")).toBeNull();
+    panel.destroy();
+  });
+
+  it("allows sending without attachments and settles a consent dialog on destroy", async () => {
+    const panel = new SidePanel(document, { onSend: vi.fn() });
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    const without = panel.confirmAttachments(["one.txt"]);
+    root.querySelector<HTMLButtonElement>("[data-action=confirm-attachments]")!.click();
+    await expect(without).resolves.toEqual([]);
+    const canceled = panel.confirmAttachments(["two.txt"]); panel.destroy();
+    await expect(canceled).resolves.toBeUndefined();
   });
 
   it("requires an exact reselected file count or explicitly continues without missing files", async () => {

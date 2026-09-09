@@ -11,7 +11,7 @@ const katexFonts = (await readdir(path.join(katexDirectory, "fonts")))
 const expectedFiles = [
   "background.js", "content.js", "icons/icon-16.png", "icons/icon-32.png", "icons/icon-48.png", "icons/icon-128.png",
   "katex/LICENSE", "katex/katex.min.css", ...katexFonts.map((font) => `katex/fonts/${font}`),
-  "manifest.json", "options.html", "options.js", "pdf.worker.min.mjs",
+  "manifest.json", "options.html", "options.js", "privacy.html", "pdf.worker.min.mjs",
 ].sort();
 
 async function filesUnder(directory, prefix = "") {

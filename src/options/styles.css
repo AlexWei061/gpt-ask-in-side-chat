@@ -76,6 +76,12 @@ input::placeholder { color: var(--text-secondary); opacity: .8; }
 .check { display: flex; align-items: flex-start; gap: 9px; font-weight: 450; }
 input[type="checkbox"] { flex-shrink: 0; width: 15px; height: 15px; margin: 3px 0 0; accent-color: var(--accent); }
 .capability { color: var(--text-secondary); }
+.setup-help { margin-top: 18px; color: var(--text-secondary); font-size: 12px; }
+.setup-help summary { cursor: pointer; color: var(--accent); }
+.setup-help p { margin: 10px 0; }
+.usage-hint { color: var(--text-secondary); font-size: 13px; }
+a { color: var(--accent); text-underline-offset: 3px; }
+a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .disclosure p, .data-controls p { margin: 11px 0; color: var(--text-secondary); font-size: 13px; line-height: 1.8; }
 .consent { margin-top: 16px; padding: 12px; border-radius: 10px; color: var(--accent); background: var(--accent-soft); }
 

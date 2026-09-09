@@ -23,7 +23,7 @@ describe("release manifest", () => {
   });
 
   it("emits the bundles referenced by the manifest", async () => {
-    const files = ["background.js", "content.js", "options.js", "manifest.json", "options.html", "pdf.worker.min.mjs", "icons/icon-16.png", "icons/icon-32.png", "icons/icon-48.png", "icons/icon-128.png"];
+    const files = ["background.js", "content.js", "options.js", "manifest.json", "options.html", "privacy.html", "pdf.worker.min.mjs", "icons/icon-16.png", "icons/icon-32.png", "icons/icon-48.png", "icons/icon-128.png"];
     const present = await Promise.all(
       files.map(async (file) => {
         try {

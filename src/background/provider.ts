@@ -115,6 +115,24 @@ function processFrame(frame: string, onDelta: (content: string) => void): { cont
   return { content, done: false };
 }
 
+async function waitForNetwork<T>(pending: Promise<T>, controller: AbortController): Promise<T> {
+  let abortWait!: () => void;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    abortWait = () => reject(controller.signal.reason);
+    if (controller.signal.aborted) abortWait();
+    else controller.signal.addEventListener("abort", abortWait, { once: true });
+  });
+  const timeout = setTimeout(() => {
+    controller.abort(new ExtensionError("NETWORK_FAILED", "等待 AI 服务商响应超时，请重试。", true));
+  }, 60_000);
+  try {
+    return await Promise.race([pending, aborted]);
+  } finally {
+    clearTimeout(timeout);
+    controller.signal.removeEventListener("abort", abortWait);
+  }
+}
+
 export async function streamChatCompletion({
   fetcher,
   url,
@@ -124,77 +142,80 @@ export async function streamChatCompletion({
   signal,
   onDelta,
 }: StreamArgs): Promise<string> {
-  let response: Response;
-  try {
-    response = await fetcher(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ model, messages, stream: true }),
-      signal,
-    });
-  } catch (error) {
-    if (signal.aborted) throw error;
-    throw new ExtensionError("NETWORK_FAILED", "无法连接 AI 服务商。", true);
-  }
+  const controller = new AbortController();
+  const abort = () => controller.abort(signal.reason);
+  if (signal.aborted) abort();
+  else signal.addEventListener("abort", abort, { once: true });
 
-  if (!response.ok) {
+  try {
+    let response: Response;
     try {
-      await response.body?.cancel();
-    } catch {
-      // Keep the status error sanitized even when transport cleanup fails.
+      response = await waitForNetwork(fetcher(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ model, messages, stream: true }),
+        signal: controller.signal,
+      }), controller);
+    } catch (error) {
+      if (signal.aborted) throw error;
+      if (controller.signal.aborted) throw controller.signal.reason;
+      throw new ExtensionError("NETWORK_FAILED", "无法连接 AI 服务商。", true);
     }
-    throw responseError(response.status);
-  }
-  if (!response.body) {
-    throw new ExtensionError("PROTOCOL_FAILED", "AI 服务商未返回流式响应内容。", true);
-  }
 
-  const decoder = new TextDecoder();
-  const reader = response.body.getReader();
-  let buffer = "";
-  let complete = "";
-  let readerFinished = false;
+    if (!response.ok) {
+      // Transport cleanup must not delay the sanitized status error.
+      void response.body?.cancel().catch(() => {});
+      throw responseError(response.status);
+    }
+    if (!response.body) {
+      throw new ExtensionError("PROTOCOL_FAILED", "AI 服务商未返回流式响应内容。", true);
+    }
 
-  try {
-    while (true) {
-      let result: ReadableStreamReadResult<Uint8Array>;
-      try {
-        result = await reader.read();
-      } catch (error) {
-        if (signal.aborted) throw error;
-        throw new ExtensionError("NETWORK_FAILED", "AI 服务商的流式响应已中断。", true);
+    const decoder = new TextDecoder();
+    const reader = response.body.getReader();
+    let buffer = "";
+    let complete = "";
+    let readerFinished = false;
+
+    try {
+      while (true) {
+        let result: ReadableStreamReadResult<Uint8Array>;
+        try {
+          result = await waitForNetwork(reader.read(), controller);
+        } catch (error) {
+          if (signal.aborted) throw error;
+          if (controller.signal.aborted) throw controller.signal.reason;
+          throw new ExtensionError("NETWORK_FAILED", "AI 服务商的流式响应已中断。", true);
+        }
+
+        if (result.value) buffer += decoder.decode(result.value, { stream: true });
+        if (result.done) {
+          buffer += decoder.decode();
+        }
+
+        let boundary: { index: number; length: number } | null;
+        while ((boundary = findEventBoundary(buffer))) {
+          const frame = buffer.slice(0, boundary.index);
+          buffer = buffer.slice(boundary.index + boundary.length);
+          const event = processFrame(frame, onDelta);
+          complete += event.content;
+          if (event.done) return complete;
+        }
+
+        if (result.done) {
+          readerFinished = true;
+          throw protocolError();
+        }
       }
-
-      if (result.value) buffer += decoder.decode(result.value, { stream: true });
-      if (result.done) {
-        buffer += decoder.decode();
-      }
-
-      let boundary: { index: number; length: number } | null;
-      while ((boundary = findEventBoundary(buffer))) {
-        const frame = buffer.slice(0, boundary.index);
-        buffer = buffer.slice(boundary.index + boundary.length);
-        const event = processFrame(frame, onDelta);
-        complete += event.content;
-        if (event.done) return complete;
-      }
-
-      if (result.done) {
-        readerFinished = true;
-        throw protocolError();
-      }
+    } finally {
+      // Cancellation can itself hang; initiate it without holding up completion.
+      if (!readerFinished) void reader.cancel().catch(() => {});
+      reader.releaseLock();
     }
   } finally {
-    if (!readerFinished) {
-      try {
-        await reader.cancel();
-      } catch {
-        // Preserve the original completion or failure reason.
-      }
-    }
-    reader.releaseLock();
+    signal.removeEventListener("abort", abort);
   }
 }
