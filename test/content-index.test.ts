@@ -67,6 +67,40 @@ describe("content bootstrap", () => {
     expect(document.querySelector("[data-side-chat-host]")).toBeNull();
   });
 
+  it("shows an empty bar on the new-chat page and captures selections directly after opening", async () => {
+    privacy = true;
+    const { bootstrapPromise } = await import("../src/content/index"); await bootstrapPromise;
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    expect(root.querySelector("[data-minimized-bar]")).toBeTruthy();
+    root.querySelector<HTMLButtonElement>("[data-minimized-bar]")!.click();
+    expect(root.querySelector<HTMLTextAreaElement>("textarea")!.disabled).toBe(true);
+    window.history.pushState({}, "", "/c/new");
+    document.body.insertAdjacentHTML("afterbegin", `<main><article data-message-author-role="assistant"><p id="quote">alpha</p></article></main>`);
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => { callback(0); return 1; });
+    await vi.waitFor(() => expect(root.querySelector("[data-minimized-bar]")).toBeTruthy());
+    root.querySelector<HTMLButtonElement>("[data-minimized-bar]")!.click();
+    expect(root.querySelector(".context-summary")?.textContent).toContain("已读取 1 条消息");
+    const select = () => {
+      document.getSelection()?.removeAllRanges();
+      const range = document.createRange(); range.selectNodeContents(document.querySelector("#quote")!);
+      document.getSelection()?.addRange(range); document.dispatchEvent(new Event("selectionchange"));
+    };
+    select();
+    expect(root.querySelector("[data-active-quote] .quote-content")?.textContent).toBe("alpha");
+    expect(document.querySelector<HTMLButtonElement>("[data-side-chat-selection-action]")!.style.display).toBe("none");
+    expect(document.getSelection()?.toString()).toBe("alpha");
+    expect(ports).toHaveLength(0);
+    root.querySelector<HTMLButtonElement>("[data-action=clear-quote]")!.click();
+    expect(root.querySelector("[data-active-quote]")).toBeNull();
+    select();
+    expect(root.querySelector("[data-active-quote] .quote-content")?.textContent).toBe("alpha");
+    document.querySelector("#quote")!.textContent = "beta"; select();
+    const input = root.querySelector<HTMLTextAreaElement>("textarea")!;
+    input.value = "explain"; input.dispatchEvent(new Event("input"));
+    root.querySelector<HTMLFormElement>("form")!.requestSubmit();
+    expect(ports[0]!.sent[0]).toMatchObject({ type: "start", payload: { conversationId: "new", question: "explain", quote: { text: "beta", sourceRole: "assistant", sourceMessageIndex: 0 } } });
+  });
+
   it("rejects malformed settings envelopes without installing UI", async () => {
     privacy = true;
     (chrome.runtime.sendMessage as unknown as (message: { type: string }, callback: (response: unknown) => void) => void) = (_message, callback) => callback({ ok: false, error: { code: "NOPE" } });
@@ -204,7 +238,7 @@ describe("content bootstrap", () => {
     window.history.pushState({}, "", "/c/attachment-new"); document.documentElement.append(document.createElement("i"));
     await Promise.resolve(); await Promise.resolve();
     resolveFetch(new Response(new Blob(["late"], { type: "text/plain" }), { status: 200 }));
-    await vi.waitFor(() => expect(document.querySelector<HTMLElement>("[data-side-chat-host]")?.style.display).toBe("none"));
+    await vi.waitFor(() => expect(root.querySelector("[data-minimized-bar]")).toBeTruthy());
     expect(root.querySelector("textarea")).toBeNull();
     expect(ports).toHaveLength(0);
   });

@@ -1,6 +1,7 @@
 import type { QuoteReference, SideMessage, WindowGeometry } from "../../shared/types";
 import { renderMarkdown } from "./markdown";
 import { sidePanelStyles } from "./styles";
+import { watchPageTheme } from "../../shared/theme";
 
 export type PanelSend = { question: string; quote?: QuoteReference; compressOldContext: boolean };
 export type PanelContextSummary = { capturedMessages: number; endpointOrigin: string; model: string; contextWindowTokens: number; approximateTokens?: number };
@@ -12,7 +13,7 @@ export interface SidePanelOptions {
   onGeometryChange?: (geometry: WindowGeometry) => void;
 }
 
-type PanelMode = "hidden" | "minimized" | "expanded";
+type PanelMode = "minimized" | "expanded";
 type PointerInteraction = {
   kind: "drag" | "resize" | "bar";
   startX: number;
@@ -28,8 +29,9 @@ const VIEWPORT_MARGIN = 12;
 export class SidePanel {
   private readonly host: HTMLElement;
   private readonly root: ShadowRoot;
+  private readonly stopTheme: () => void;
   private geometry = { ...DEFAULT_GEOMETRY };
-  private mode: PanelMode = "hidden";
+  private mode: PanelMode = "minimized";
   private interaction: PointerInteraction | null = null;
   private barDragged = false;
   private settingsOpen = false;
@@ -54,6 +56,10 @@ export class SidePanel {
     this.host.setAttribute("aria-label", "侧边对话");
     this.root = this.host.attachShadow({ mode: "open" });
     document.documentElement.append(this.host);
+    this.stopTheme = watchPageTheme(document, (theme) => {
+      this.host.dataset.sideChatTheme = theme;
+      this.syncSettingsTheme();
+    });
     document.defaultView?.addEventListener("resize", this.viewportResize);
     this.render();
   }
@@ -75,15 +81,32 @@ export class SidePanel {
     this.busy = false;
     this.accepted = false;
     this.stream = "";
-    this.mode = "hidden";
+    this.mode = "minimized";
     this.render();
   }
 
-  setMessages(messages: SideMessage[], restoreVisibility = false): void {
+  setMessages(messages: SideMessage[]): void {
     this.messages = messages;
     this.stream = "";
-    if (restoreVisibility && this.mode === "hidden") this.mode = messages.length > 0 ? "minimized" : "hidden";
     this.render();
+  }
+
+  setQuote(quote: QuoteReference | null): boolean {
+    if (this.mode !== "expanded" || this.busy || this.settingsOpen) return false;
+    this.quote = quote;
+    if (this.lastSubmission) {
+      const compress = this.root.querySelector<HTMLInputElement>("input[type=checkbox]")?.checked ?? this.lastSubmission.compressOldContext;
+      this.draft ||= this.lastSubmission.question;
+      this.lastSubmission = null;
+      this.error = null;
+      this.notice = "";
+      this.stream = "";
+      this.render();
+      this.root.querySelector<HTMLInputElement>("input[type=checkbox]")!.checked = compress;
+    } else {
+      this.syncActiveQuote();
+    }
+    return true;
   }
 
   open(quote: QuoteReference, contextSummary?: PanelContextSummary): void {
@@ -192,6 +215,7 @@ export class SidePanel {
   }
 
   destroy(): void {
+    this.stopTheme();
     this.closeMissingResolver(undefined);
     this.cancelStreamFrame();
     this.endInteraction(false);
@@ -351,11 +375,6 @@ export class SidePanel {
     katexStyle.href = typeof chrome !== "undefined" && chrome.runtime?.getURL ? chrome.runtime.getURL("katex/katex.min.css") : "katex/katex.min.css";
     this.root.append(style, katexStyle);
 
-    if (this.mode === "hidden") {
-      this.host.style.display = "none";
-      return;
-    }
-    this.host.style.display = "";
     if (this.mode === "minimized") {
       const bar = this.button("", "restore", () => this.restore(), false, "打开侧边对话");
       bar.className = "minimized-bar";
@@ -401,7 +420,15 @@ export class SidePanel {
     header.addEventListener("pointerdown", this.dragDown);
     const title = this.document.createElement("strong");
     title.textContent = "侧边对话";
-    header.append(title);
+    const mark = this.icon("chat");
+    mark.classList.add("panel-mark");
+    const heading = this.document.createElement("div");
+    heading.className = "panel-heading";
+    const caption = this.document.createElement("span");
+    caption.className = "panel-caption";
+    caption.textContent = "当前对话的独立追问";
+    heading.append(title, caption);
+    header.append(mark, heading);
     header.append(this.button(this.settingsOpen ? "返回对话" : "设置", "settings", () => {
       this.settingsOpen = !this.settingsOpen;
       this.render();
@@ -416,7 +443,9 @@ export class SidePanel {
     if (this.settingsOpen) {
       const frame = this.document.createElement("iframe");
       frame.title = "模型与 API 设置";
-      frame.src = typeof chrome !== "undefined" && chrome.runtime?.getURL ? chrome.runtime.getURL("options.html?embedded=1") : "options.html?embedded=1";
+      const settingsPath = `options.html?embedded=1&theme=${this.host.dataset.sideChatTheme}`;
+      frame.src = typeof chrome !== "undefined" && chrome.runtime?.getURL ? chrome.runtime.getURL(settingsPath) : settingsPath;
+      frame.addEventListener("load", () => this.syncSettingsTheme());
       frame.style.cssText = "width:100%;flex:1;min-height:0;border:0;border-radius:0 0 16px 16px";
       panel.append(frame);
       this.root.append(panel);
@@ -429,7 +458,20 @@ export class SidePanel {
       summary.className = "context-summary";
       const limit = this.contextSummary.contextWindowTokens > 0 ? this.contextSummary.contextWindowTokens.toLocaleString("en-US") : "尚未配置";
       const approximate = this.contextSummary.approximateTokens === undefined ? "发送时计算" : this.contextSummary.approximateTokens.toLocaleString("en-US");
-      summary.textContent = `已读取 ${this.contextSummary.capturedMessages} 条消息 · 目标：${this.contextSummary.endpointOrigin} · 模型：${this.contextSummary.model} · 预计词元：${approximate} / ${limit}`;
+      const overview = this.document.createElement("div");
+      overview.className = "context-overview";
+      const model = this.document.createElement("span");
+      model.className = "model-name";
+      model.textContent = this.contextSummary.model;
+      model.title = `模型：${this.contextSummary.model}`;
+      const captured = this.document.createElement("span");
+      captured.textContent = `已读取 ${this.contextSummary.capturedMessages} 条消息`;
+      overview.append(model, captured);
+      const destination = this.document.createElement("div");
+      destination.textContent = `目标：${this.contextSummary.endpointOrigin}`;
+      const budget = this.document.createElement("div");
+      budget.textContent = `预计词元：${approximate} / ${limit}`;
+      summary.append(overview, destination, budget);
       panel.append(summary);
     }
 
@@ -437,6 +479,18 @@ export class SidePanel {
     list.className = "messages";
     list.setAttribute("role", "log");
     list.setAttribute("aria-live", "polite");
+    if (this.messages.length === 0 && !this.lastSubmission && !this.stream) {
+      const empty = this.document.createElement("div");
+      empty.className = "empty-state";
+      const title = this.document.createElement("strong");
+      title.textContent = "从这里，继续探索";
+      const detail = this.document.createElement("p");
+      detail.textContent = this.conversationId
+        ? "直接提问，或选中主对话中的文字，引用会自动显示在这里。"
+        : "先在 ChatGPT 中发送一条消息，建立对话后即可在这里提问。";
+      empty.append(this.icon("chat"), title, detail);
+      list.append(empty);
+    }
     for (const message of this.messages) list.append(this.message(message));
     if (this.lastSubmission) {
       const pending = this.message({ id: "pending", role: "user", content: this.lastSubmission.question, ...(this.lastSubmission.quote ? { quote: this.lastSubmission.quote } : {}), status: "complete", createdAt: "" });
@@ -473,19 +527,9 @@ export class SidePanel {
     }
     panel.append(status);
 
-    if (this.quote && !this.lastSubmission) {
-      const activeQuote = this.quoteBlock(this.quote.text);
-      activeQuote.id = "side-chat-active-quote";
-      activeQuote.classList.add("active-quote");
-      activeQuote.dataset.activeQuote = "true";
-      panel.append(activeQuote);
-    }
-
     const form = this.document.createElement("form");
     const textarea = this.document.createElement("textarea");
     textarea.setAttribute("aria-label", "侧边对话问题");
-    if (this.quote && !this.lastSubmission) textarea.setAttribute("aria-describedby", "side-chat-active-quote");
-    textarea.placeholder = this.quote ? "针对所选内容提问……" : "继续追问……";
     textarea.value = this.draft;
     textarea.disabled = !this.conversationId || this.busy;
     textarea.addEventListener("keydown", (event) => {
@@ -511,7 +555,10 @@ export class SidePanel {
     const composer = this.document.createElement("div");
     composer.className = "composer";
     composer.append(textarea, send);
-    form.append(composer, controls);
+    const hint = this.document.createElement("div");
+    hint.className = "composer-hint";
+    hint.textContent = "Enter 发送 · Shift + Enter 换行";
+    form.append(composer, hint, controls);
     form.addEventListener("submit", (event) => {
       event.preventDefault();
       const question = this.draft.trim();
@@ -520,11 +567,61 @@ export class SidePanel {
     });
     panel.append(form);
     this.root.append(panel);
+    this.syncActiveQuote();
     this.syncGeometry();
+  }
+
+  private syncActiveQuote(): void {
+    const form = this.root.querySelector("form");
+    const textarea = form?.querySelector("textarea");
+    if (!form || !textarea) return;
+    this.root.querySelector("[data-active-quote]")?.remove();
+    textarea.removeAttribute("aria-describedby");
+    textarea.placeholder = this.quote ? "针对所选内容提问……" : "继续追问……";
+    if (!this.quote || this.lastSubmission) return;
+    const activeQuote = this.quoteBlock(this.quote.text);
+    activeQuote.id = "side-chat-active-quote";
+    activeQuote.classList.add("active-quote");
+    activeQuote.dataset.activeQuote = "true";
+    activeQuote.querySelector(".quote-label")!.append(this.button("×", "clear-quote", () => {
+      if (!this.setQuote(null)) return;
+      this.document.getSelection()?.removeAllRanges();
+      this.root.querySelector<HTMLTextAreaElement>("textarea")?.focus();
+    }, false, "清除引用"));
+    form.before(activeQuote);
+    textarea.setAttribute("aria-describedby", activeQuote.id);
   }
 
   private canSend(): boolean {
     return Boolean(this.draft.trim() && this.conversationId && !this.busy);
+  }
+
+  private syncSettingsTheme(): void {
+    const frame = this.root.querySelector<HTMLIFrameElement>("iframe");
+    // Only a color preference is sent to this extension-owned settings frame.
+    frame?.contentWindow?.postMessage({ type: "side-chat:theme", theme: this.host.dataset.sideChatTheme }, "*");
+  }
+
+  private icon(name: "chat" | "settings" | "clear" | "minimize" | "send"): SVGSVGElement {
+    const paths = {
+      chat: "M6 4h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-7l-5 4v-4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z M8 9h8 M8 13h5",
+      settings: "M4 7h16 M4 17h16 M9 4v6 M15 14v6",
+      clear: "M4 7h16 M9 7V4h6v3 M6 7l1 13h10l1-13 M10 11v5 M14 11v5",
+      minimize: "M5 12h14",
+      send: "M12 19V5 M5 12l7-7 7 7",
+    };
+    const svg = this.document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "1.65");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
+    const path = this.document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", paths[name]);
+    svg.append(path);
+    return svg;
   }
 
   private button(text: string, action: string, click: () => void, submit = false, label = text): HTMLButtonElement {
@@ -534,6 +631,10 @@ export class SidePanel {
     button.setAttribute("aria-label", label);
     button.title = label;
     button.textContent = text;
+    if (action === "clear" || action === "minimize" || action === "send" || (action === "settings" && !this.settingsOpen)) {
+      button.classList.add("icon-button");
+      button.replaceChildren(this.icon(action));
+    }
     button.addEventListener("click", click);
     return button;
   }

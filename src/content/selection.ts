@@ -1,8 +1,15 @@
 import { t } from "../shared/i18n";
 import type { QuoteReference } from "../shared/types";
 import { ChatGptPageAdapter } from "./page-adapter";
+import { watchPageTheme } from "../shared/theme";
 
 export function quoteFromRange(range: Range, adapter: ChatGptPageAdapter): QuoteReference | null {
+  const touchesEditable = [range.startContainer, range.endContainer].some((node) => {
+    const element = node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement;
+    return element?.closest('input, textarea, [contenteditable]:not([contenteditable="false"])');
+  });
+  if (touchesEditable) return null;
+
   const startMessage = adapter.findMessageElement(range.startContainer);
   const endMessage = adapter.findMessageElement(range.endContainer);
   const text = range.toString().trim();
@@ -26,9 +33,14 @@ export function quoteFromRange(range: Range, adapter: ChatGptPageAdapter): Quote
 export class SelectionController {
   private readonly adapter: ChatGptPageAdapter;
   private readonly button: HTMLButtonElement;
+  private readonly stopTheme: () => void;
   private frameId: number | null = null;
 
-  constructor(private readonly document: Document, private readonly onAsk: (quote: QuoteReference) => void) {
+  constructor(
+    private readonly document: Document,
+    private readonly onAsk: (quote: QuoteReference) => void,
+    private readonly onSelect?: (quote: QuoteReference) => boolean,
+  ) {
     this.adapter = new ChatGptPageAdapter(document);
     this.button = document.createElement("button");
     this.button.type = "button";
@@ -40,15 +52,20 @@ export class SelectionController {
       display: "none",
       background: "#202123",
       color: "#fff",
-      border: "0",
-      borderRadius: "999px",
-      padding: "8px 12px",
+      border: "1px solid #dde3df",
+      borderRadius: "10px",
+      padding: "8px 13px",
       maxWidth: "calc(100vw - 16px)",
       boxSizing: "border-box",
-      font: "inherit",
+      font: '500 13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif',
       cursor: "pointer",
     });
     document.body.append(this.button);
+    this.stopTheme = watchPageTheme(document, (theme) => Object.assign(this.button.style, theme === "dark" ? {
+      background: "#2b2b2b", color: "#ececec", borderColor: "#474747", boxShadow: "0 4px 16px #0004", colorScheme: "dark",
+    } : {
+      background: "#fff", color: "#187659", borderColor: "#dde3df", boxShadow: "0 4px 16px #17251d20", colorScheme: "light",
+    }));
 
     document.addEventListener("selectionchange", this.handleSelectionChange);
     document.addEventListener("scroll", this.hide, true);
@@ -61,6 +78,7 @@ export class SelectionController {
   }
 
   destroy(): void {
+    this.stopTheme();
     this.document.removeEventListener("selectionchange", this.handleSelectionChange);
     this.document.removeEventListener("scroll", this.hide, true);
     this.document.removeEventListener("keydown", this.handleKeydown);
@@ -93,7 +111,8 @@ export class SelectionController {
 
   private refreshSelection(): void {
     const range = this.currentRange();
-    if (!range || !quoteFromRange(range, this.adapter)) {
+    const quote = range ? quoteFromRange(range, this.adapter) : null;
+    if (!range || !quote || this.onSelect?.(quote)) {
       this.hide();
       return;
     }

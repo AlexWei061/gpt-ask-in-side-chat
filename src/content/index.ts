@@ -61,14 +61,15 @@ async function bootstrapImpl(): Promise<void> {
   });
   const selection = new SelectionController(document, (quote) => {
     panel.open(quote, contextSummary(adapter.getMessageElements().length));
-  });
+  }, (quote) => panel.setQuote(quote));
   async function loadConversation(): Promise<void> {
     const token = ++generation; disconnectStream();
     const conversationId = adapter.getConversationId(); panel.setConversation(conversationId, []);
+    panel.setContextSummary(contextSummary(adapter.getMessageElements().length));
     if (!conversationId) return;
     try {
       const record = await request<SideChatRecord | null>({ type: "history:load", conversationId }, (value): value is SideChatRecord | null => value === null || (isSideChatRecord(value) && value.conversationId === conversationId));
-      if (!disposed && token === generation && adapter.getConversationId() === conversationId) panel.setMessages(record?.messages ?? [], true);
+      if (!disposed && token === generation && adapter.getConversationId() === conversationId) panel.setMessages(record?.messages ?? []);
     } catch { if (!disposed && token === generation) panel.setNotice("无法加载侧边对话记录。"); }
   }
   async function clear(): Promise<void> {

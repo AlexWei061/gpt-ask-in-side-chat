@@ -9,11 +9,103 @@ const messages: SideMessage[] = [{ id: "one", role: "assistant", content: "**sav
 describe("side panel", () => {
   afterEach(() => { document.querySelectorAll("[data-side-chat-host]").forEach((node) => node.remove()); document.body.innerHTML = ""; document.body.style.marginRight = ""; vi.restoreAllMocks(); });
 
+  it("starts with an accessible bar and opens an empty conversation without a quote", () => {
+    const onSend = vi.fn();
+    const panel = new SidePanel(document, { onSend });
+    panel.setConversation(null, []);
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    const bar = root.querySelector<HTMLButtonElement>("[data-minimized-bar]")!;
+    expect(bar?.getAttribute("aria-label")).toBe("打开侧边对话");
+    bar.click();
+    expect(root.querySelector(".panel")).toBeTruthy();
+    expect(root.querySelector<HTMLTextAreaElement>("textarea")!.disabled).toBe(true);
+    expect(root.querySelector(".empty-state")?.textContent).toContain("先在 ChatGPT 中发送一条消息");
+    expect(onSend).not.toHaveBeenCalled();
+    panel.setConversation("new", []);
+    root.querySelector<HTMLButtonElement>("[data-minimized-bar]")!.click();
+    expect(root.querySelector<HTMLTextAreaElement>("textarea")!.disabled).toBe(false);
+    expect(root.querySelector("[data-active-quote]")).toBeNull();
+    panel.destroy();
+  });
+
+  it("replaces and clears the draft quote without replacing the composer or stored quotes", () => {
+    const onSend = vi.fn(); const onClear = vi.fn();
+    const panel = new SidePanel(document, { onSend, onClear });
+    panel.setConversation("c", [{ id: "old", role: "user", content: "old question", quote, status: "complete", createdAt: "" }]);
+    panel.open(quote);
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    const input = root.querySelector<HTMLTextAreaElement>("textarea")!;
+    const compression = root.querySelector<HTMLInputElement>("input[type=checkbox]")!;
+    const log = root.querySelector<HTMLElement>(".messages")!;
+    input.value = "my draft"; input.dispatchEvent(new Event("input"));
+    compression.checked = true;
+    log.scrollTop = 23;
+    input.blur();
+    const replacement = { ...quote, text: "replacement words" };
+    expect(panel.setQuote(replacement)).toBe(true);
+    expect(root.querySelector("[data-active-quote] .quote-content")?.textContent).toBe(replacement.text);
+    expect(root.activeElement).not.toBe(input);
+    expect(root.querySelector("textarea")).toBe(input);
+    expect(log.scrollTop).toBe(23);
+    root.querySelector<HTMLButtonElement>("[data-action=clear-quote]")!.click();
+    expect(root.querySelector("[data-active-quote]")).toBeNull();
+    expect(input.hasAttribute("aria-describedby")).toBe(false);
+    expect(input.value).toBe("my draft");
+    expect(compression.checked).toBe(true);
+    expect(root.querySelector(".messages .quote-content")?.textContent).toBe(quote.text);
+    expect(onSend).not.toHaveBeenCalled(); expect(onClear).not.toHaveBeenCalled();
+    expect(panel.setQuote(replacement)).toBe(true);
+    expect(root.querySelector("[data-active-quote] .quote-content")?.textContent).toBe(replacement.text);
+    root.querySelector<HTMLButtonElement>("[data-action=clear-quote]")!.click();
+    root.querySelector<HTMLFormElement>("form")!.requestSubmit();
+    expect(onSend).toHaveBeenCalledWith({ question: "my draft", compressOldContext: true });
+    panel.destroy();
+  });
+
+  it("only accepts automatic quotes in an idle expanded chat", () => {
+    const panel = new SidePanel(document, { onSend: vi.fn() });
+    panel.setConversation("c", []);
+    expect(panel.setQuote(quote)).toBe(false);
+    panel.open(quote); panel.setBusy(true);
+    expect(panel.setQuote({ ...quote, text: "other" })).toBe(false);
+    expect(panel.setQuote(null)).toBe(false);
+    panel.setBusy(false);
+    vi.spyOn(HTMLIFrameElement.prototype, "src", "set").mockImplementation(() => {});
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    root.querySelector<HTMLButtonElement>("[data-action=settings]")!.click();
+    const frame = root.querySelector("iframe");
+    expect(panel.setQuote(quote)).toBe(false);
+    expect(root.querySelector("iframe")).toBe(frame);
+    panel.destroy();
+  });
+
+  it("replaces a failed request quote and restores its question for the next send", () => {
+    const onSend = vi.fn();
+    const panel = new SidePanel(document, { onSend });
+    panel.setConversation("c", []); panel.open(quote);
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    const input = root.querySelector<HTMLTextAreaElement>("textarea")!;
+    input.value = "explain this"; input.dispatchEvent(new Event("input"));
+    root.querySelector<HTMLInputElement>("input[type=checkbox]")!.checked = true;
+    root.querySelector<HTMLFormElement>("form")!.requestSubmit();
+    panel.setAccepted(); panel.appendDelta("partial answer");
+    panel.setError({ message: "connection lost", retryable: true });
+    const replacement = { ...quote, text: "new selection" };
+    expect(panel.setQuote(replacement)).toBe(true);
+    expect(root.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("explain this");
+    expect(root.querySelector("[data-action=retry]")).toBeNull();
+    expect(root.querySelector("[data-pending-message]")).toBeNull();
+    expect(root.querySelector("[data-stream-message]")).toBeNull();
+    root.querySelector<HTMLFormElement>("form")!.requestSubmit();
+    expect(onSend).toHaveBeenLastCalledWith({ question: "explain this", quote: replacement, compressOldContext: true });
+    panel.destroy();
+  });
+
   it("opens a quote without sending, then submits the exact explicit payload", () => {
     const onSend = vi.fn();
     const panel = new SidePanel(document, { onSend });
     const host = document.querySelector<HTMLElement>("[data-side-chat-host]")!;
-    expect(host.style.display).toBe("none");
+    expect(host.shadowRoot!.querySelector("[data-minimized-bar]")).toBeTruthy();
     panel.setConversation("conversation", []);
     panel.open(quote);
     expect(host.style.display).toBe("");
@@ -33,7 +125,7 @@ describe("side panel", () => {
     const onSend = vi.fn();
     const panel = new SidePanel(document, { onSend });
     panel.setConversation("c", []);
-    panel.setMessages(messages, true);
+    panel.setMessages(messages);
     const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
     root.querySelector<HTMLButtonElement>("[data-action=restore]")!.click();
     const input = root.querySelector<HTMLTextAreaElement>("textarea")!;
@@ -253,13 +345,13 @@ describe("side panel", () => {
     panel.destroy();
   });
 
-  it("hides on conversation change, then exposes loaded history as a minimized bar", () => {
+  it("keeps a minimized bar on conversation change before and after loading history", () => {
     const panel = new SidePanel(document, { onSend: vi.fn() });
     panel.setConversation("one", messages); panel.open(quote); panel.setError({ message: "old error", retryable: true });
     panel.setConversation("two", []);
     const host = document.querySelector<HTMLElement>("[data-side-chat-host]")!;
-    expect(host.style.display).toBe("none");
-    panel.setMessages(messages, true);
+    expect(host.shadowRoot!.querySelector("[data-minimized-bar]")).toBeTruthy();
+    panel.setMessages(messages);
     expect(host.style.display).toBe("");
     expect(host.shadowRoot!.querySelector("[data-minimized-bar]")?.textContent).toContain("侧边对话");
     expect(host.shadowRoot!.querySelector(".panel")).toBeNull();
@@ -272,10 +364,10 @@ describe("side panel", () => {
   it("does not hide a newly opened draft when history finishes loading", () => {
     const panel = new SidePanel(document, { onSend: vi.fn() });
     panel.setConversation("c", []); panel.open(quote);
-    panel.setMessages([], true);
+    panel.setMessages([]);
     const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
     expect(root.querySelector("textarea")).toBeTruthy();
-    panel.minimize(); panel.setMessages([], true);
+    panel.minimize(); panel.setMessages([]);
     expect(root.querySelector("[data-minimized-bar]")).toBeTruthy();
     panel.destroy();
   });
@@ -539,7 +631,7 @@ describe("side panel", () => {
     panel.setError({ message: "old", retryable: true });
     panel.setConversation(null, []);
     const host = document.querySelector<HTMLElement>("[data-side-chat-host]")!; const root = host.shadowRoot!;
-    expect(host.style.display).toBe("none");
+    expect(host.shadowRoot!.querySelector("[data-minimized-bar]")).toBeTruthy();
     expect(root.textContent).not.toContain("saved");
     expect(root.querySelector(".status")).toBeNull();
     expect(root.querySelector("form")).toBeNull();

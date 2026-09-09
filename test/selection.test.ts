@@ -74,6 +74,134 @@ describe("selection", () => {
     controller.destroy();
   });
 
+  it("lets the selection callback consume a quote and hide an existing action without clearing selection", () => {
+    document.body.innerHTML = `<main><article data-message-author-role="assistant"><p id="a">alpha beta</p></article></main>`;
+    const onAsk = vi.fn();
+    const onSelect = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(0);
+      return 1;
+    });
+    const range = document.createRange();
+    range.selectNodeContents(document.querySelector("#a")!);
+    document.getSelection()?.addRange(range);
+    const controller = new SelectionController(document, onAsk, onSelect);
+    const button = document.querySelector<HTMLButtonElement>("[data-side-chat-selection-action]")!;
+
+    document.dispatchEvent(new Event("selectionchange"));
+    expect(button.style.display).toBe("block");
+    document.dispatchEvent(new Event("selectionchange"));
+
+    expect(onSelect).toHaveBeenCalledTimes(2);
+    expect(onSelect).toHaveBeenLastCalledWith({ text: "alpha beta", sourceRole: "assistant", sourceMessageIndex: 0 });
+    expect(button.style.display).toBe("none");
+    expect(document.getSelection()?.toString()).toBe("alpha beta");
+    expect(onAsk).not.toHaveBeenCalled();
+    controller.destroy();
+  });
+
+  it("passes repeated and replacement selections to the callback with their current source", () => {
+    document.body.innerHTML = `<main><article data-message-author-role="assistant"><p id="a">alpha beta</p></article><article data-message-author-role="user"><p id="b">gamma</p></article></main>`;
+    const onAsk = vi.fn();
+    const onSelect = vi.fn().mockReturnValue(true);
+    let refresh: FrameRequestCallback | undefined;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      refresh = callback;
+      return 1;
+    });
+    const controller = new SelectionController(document, onAsk, onSelect);
+
+    for (const selector of ["#a", "#a", "#b"]) {
+      const range = document.createRange();
+      range.selectNodeContents(document.querySelector(selector)!);
+      document.getSelection()?.removeAllRanges();
+      document.getSelection()?.addRange(range);
+      document.dispatchEvent(new Event("selectionchange"));
+      refresh?.(0);
+    }
+
+    expect(onSelect.mock.calls).toEqual([
+      [{ text: "alpha beta", sourceRole: "assistant", sourceMessageIndex: 0 }],
+      [{ text: "alpha beta", sourceRole: "assistant", sourceMessageIndex: 0 }],
+      [{ text: "gamma", sourceRole: "user", sourceMessageIndex: 1 }],
+    ]);
+    expect(document.getSelection()?.toString()).toBe("gamma");
+    expect(onAsk).not.toHaveBeenCalled();
+    controller.destroy();
+  });
+
+  it("keeps the explicit action available when the selection callback declines a quote", () => {
+    document.body.innerHTML = `<main><article data-message-author-role="assistant"><p id="a">alpha beta</p></article></main>`;
+    const onAsk = vi.fn();
+    const onSelect = vi.fn().mockReturnValue(false);
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(0);
+      return 1;
+    });
+    const range = document.createRange();
+    range.selectNodeContents(document.querySelector("#a")!);
+    document.getSelection()?.addRange(range);
+    const controller = new SelectionController(document, onAsk, onSelect);
+    const button = document.querySelector<HTMLButtonElement>("[data-side-chat-selection-action]")!;
+
+    document.dispatchEvent(new Event("selectionchange"));
+    expect(button.style.display).toBe("block");
+    expect(onAsk).not.toHaveBeenCalled();
+    button.click();
+
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onAsk).toHaveBeenCalledWith({ text: "alpha beta", sourceRole: "assistant", sourceMessageIndex: 0 });
+    expect(document.getSelection()?.rangeCount).toBe(0);
+    controller.destroy();
+  });
+
+  it("does not notify the callback for empty, outside, or cross-message selections", () => {
+    document.body.innerHTML = `<p id="outside">outside</p><main><article data-message-author-role="assistant"><p id="a">alpha beta</p><p id="empty"> </p></article><article data-message-author-role="user"><p id="b">gamma</p></article></main>`;
+    const onSelect = vi.fn().mockReturnValue(true);
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(0);
+      return 1;
+    });
+    const controller = new SelectionController(document, vi.fn(), onSelect);
+    for (const selector of ["#empty", "#outside", "#a"]) {
+      const range = document.createRange();
+      range.selectNodeContents(document.querySelector(selector)!);
+      if (selector === "#a") range.setEnd(document.querySelector("#b")!.firstChild!, 5);
+      document.getSelection()?.removeAllRanges();
+      document.getSelection()?.addRange(range);
+      document.dispatchEvent(new Event("selectionchange"));
+    }
+
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(document.querySelector<HTMLButtonElement>("[data-side-chat-selection-action]")!.style.display).toBe("none");
+    controller.destroy();
+  });
+
+  it.each([
+    `<input id="edit" value="draft">`,
+    `<textarea id="edit">draft</textarea>`,
+    `<div id="edit" contenteditable><span>draft</span></div>`,
+    `<div id="edit" contenteditable="plaintext-only">draft</div>`,
+  ])("ignores selections starting in an editable message descendant: %s", (editable) => {
+    document.body.innerHTML = `<main><article data-message-author-role="user">${editable}<p id="a">alpha beta</p></article></main>`;
+    const onSelect = vi.fn().mockReturnValue(true);
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(0);
+      return 1;
+    });
+    const range = document.createRange();
+    range.setStart(document.querySelector("#edit")!, 0);
+    range.setEnd(document.querySelector("#a")!.firstChild!, 5);
+    document.getSelection()?.addRange(range);
+    const controller = new SelectionController(document, vi.fn(), onSelect);
+
+    expect(quoteFromRange(range, new ChatGptPageAdapter(document))).toBeNull();
+    document.dispatchEvent(new Event("selectionchange"));
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(document.querySelector<HTMLButtonElement>("[data-side-chat-selection-action]")!.style.display).toBe("none");
+    controller.destroy();
+  });
+
   it("positions the action inside the viewport and hides it for invalid selections", () => {
     document.body.innerHTML = `<main><article data-message-author-role="assistant"><p id="a">alpha beta</p></article></main>`;
     Object.defineProperties(window, {

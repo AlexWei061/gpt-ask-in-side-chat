@@ -5,31 +5,43 @@ import type { ProviderConfig } from "../shared/types";
 import type { RuntimeResponse } from "../shared/protocol";
 import { normalizeProviderConfig } from "../background/settings";
 import { permissionPattern } from "../background/permissions";
+import { followTheme } from "../shared/theme";
 
 type PublicSettings = { config: ProviderConfig | null; privacyAccepted: boolean; hasSessionKey: boolean };
 
 document.head.append(Object.assign(document.createElement("style"), { textContent: styles }));
 if (new URLSearchParams(location.search).get("embedded") === "1") document.documentElement.classList.add("embedded");
+followTheme(document);
 const appElement = document.querySelector<HTMLElement>("#app");
 if (!appElement) throw new Error("无法初始化设置页。");
 const app = appElement;
 app.innerHTML = `
-  <h1>侧边对话助手</h1>
-  <section class="disclosure" aria-labelledby="disclosure-title">
-    <h2 id="disclosure-title">使用前说明</h2>
-    <p>打开侧边对话时，扩展会统计当前 ChatGPT 页面中可见的消息。发送侧边问题时，扩展会读取这些消息，并将它们、所选引文、问题以及你明确批准的附件，直接发送到你配置的模型接口。</p>
-    <p>本扩展没有开发者后端，不会向开发者发送你的对话、API 密钥、侧边对话记录或使用统计。你选择的模型服务商将按其条款和隐私政策处理提交的数据。</p>
-    <label class="check"><input id="privacy" type="checkbox"> 我已了解并同意上述数据使用方式。</label>
-  </section>
+  <header class="page-header">
+    <span class="app-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4h10a3 3 0 0 1 3 3v7a3 3 0 0 1-3 3h-5l-5 4v-4a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3Z"/><path d="M8 9h8M8 13h5"/></svg></span>
+    <div><h1>侧边对话助手</h1><p>模型与偏好设置</p></div>
+  </header>
   <form id="settings">
-    <label>接口地址（Base URL） <input id="base-url" type="url" required placeholder="https://provider.example/v1"></label>
-    <label>模型 <input id="model" required></label>
-    <label>上下文窗口（词元） <input id="context-window" type="number" min="1024" max="10000000" step="1" required></label>
-    <label class="check"><input id="images" type="checkbox"> 模型支持图片输入</label>
-    <label>本次 Chrome 会话的 API 密钥 <input id="api-key" type="password" autocomplete="off" spellcheck="false"></label>
-    <div class="actions"><button type="submit">保存并授权接口访问</button><button id="test" type="button">测试连接</button></div>
+    <section class="settings-card" aria-labelledby="connection-title">
+      <div class="section-heading"><h2 id="connection-title">模型连接</h2><p>连接你使用的模型服务。</p></div>
+      <div class="fields">
+        <label>接口地址（Base URL） <input id="base-url" type="url" required placeholder="https://provider.example/v1"></label>
+        <div class="field-row">
+          <label>模型 <input id="model" required></label>
+          <label>上下文窗口（词元） <input id="context-window" type="number" min="1024" max="10000000" step="1" required></label>
+        </div>
+        <label class="check capability"><input id="images" type="checkbox"> 模型支持图片输入</label>
+        <label>本次 Chrome 会话的 API 密钥 <input id="api-key" type="password" autocomplete="off" spellcheck="false"></label>
+      </div>
+    </section>
+    <section class="settings-card disclosure" aria-labelledby="disclosure-title">
+      <h2 id="disclosure-title">使用前说明</h2>
+      <p>打开侧边对话时，扩展会统计当前 ChatGPT 页面中可见的消息。发送侧边问题时，扩展会读取这些消息，并将它们、所选引文、问题以及你明确批准的附件，直接发送到你配置的模型接口。</p>
+      <p>本扩展没有开发者后端，不会向开发者发送你的对话、API 密钥、侧边对话记录或使用统计。你选择的模型服务商将按其条款和隐私政策处理提交的数据。</p>
+      <label class="check consent"><input id="privacy" type="checkbox"> 我已了解并同意上述数据使用方式。</label>
+    </section>
+    <div class="actions form-actions"><button type="submit">保存并授权接口访问</button><button id="test" type="button">测试连接</button></div>
   </form>
-  <section class="data-controls" aria-labelledby="data-title">
+  <section class="settings-card data-controls" aria-labelledby="data-title">
     <h2 id="data-title">本地数据管理</h2>
     <p>API 密钥仅保存在本次 Chrome 会话中。侧边对话记录加密保存在当前浏览器本地。</p>
     <div class="actions"><button id="forget" type="button">忘记本次会话的 API 密钥</button><button id="clear" class="danger" type="button">清空全部侧边对话记录</button></div>
