@@ -5,12 +5,14 @@ import { chatCompletionsUrl, permissionPattern } from "./permissions";
 import {
   forgetSessionKey,
   loadInternalSettings,
+  loadPublicSettings,
   loadUiPreferences,
   normalizeWindowGeometry,
-  publicSettings,
   restrictStorageAccess,
   saveWindowGeometry,
-  saveProviderConfig,
+  saveProviderProfile,
+  selectProviderProfile,
+  deleteProviderProfile,
   setSessionKey,
 } from "./settings";
 import { ExtensionError, type ExtensionErrorCode } from "../shared/errors";
@@ -39,8 +41,12 @@ chrome.action.onClicked.addListener(() => {
   void chrome.runtime.openOptionsPage();
 });
 
-chrome.runtime.onMessage.addListener((request: unknown, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((request: unknown, sender, sendResponse) => {
   if (!isRuntimeRequest(request)) return false;
+  if (["settings:save", "settings:delete", "key:set", "key:forget", "provider:test"].includes(request.type) && !isOptionsSender(sender)) {
+    sendResponse({ ok: false, error: { code: "PERMISSION_REQUIRED", message: "请在扩展设置中管理 API 配置。" } });
+    return false;
+  }
   void handleRuntimeRequest(request).then(sendResponse);
   return true;
 });
@@ -89,14 +95,33 @@ chrome.runtime.onConnect.addListener((port) => {
 async function handleRuntimeRequest(request: RuntimeRequest): Promise<RuntimeResponse> {
   try {
     switch (request.type) {
-      case "settings:get": return { ok: true, value: publicSettings(await loadInternalSettings()) };
+      case "settings:get": return { ok: true, value: await loadPublicSettings() };
       case "settings:save": {
-        await saveProviderConfig(request.config, request.privacyAccepted);
-        return { ok: true };
+        const value = await saveProviderProfile(request);
+        void notifySettingsChanged();
+        return { ok: true, value };
       }
-      case "key:set": await setSessionKey(request.apiKey); return { ok: true };
-      case "key:forget": await forgetSessionKey(); return { ok: true };
-      case "provider:test": await testProviderConnection(); return { ok: true };
+      case "settings:select": {
+        const value = await selectProviderProfile(request.profileId);
+        void notifySettingsChanged();
+        return { ok: true, value };
+      }
+      case "settings:delete": {
+        const value = await deleteProviderProfile(request.profileId);
+        void notifySettingsChanged();
+        return { ok: true, value };
+      }
+      case "key:set": {
+        const value = await setSessionKey(request.apiKey, request.profileId);
+        void notifySettingsChanged();
+        return { ok: true, value };
+      }
+      case "key:forget": {
+        const value = await forgetSessionKey(request.profileId);
+        void notifySettingsChanged();
+        return { ok: true, value };
+      }
+      case "provider:test": await testProviderConnection(request.profileId); return { ok: true };
       case "ui:get": return { ok: true, value: await loadUiPreferences() };
       case "ui:set-geometry": {
         const windowGeometry = normalizeWindowGeometry(request.geometry);
@@ -113,8 +138,24 @@ async function handleRuntimeRequest(request: RuntimeRequest): Promise<RuntimeRes
   }
 }
 
-async function testProviderConnection(): Promise<void> {
-  const settings = await loadInternalSettings();
+function isOptionsSender(sender: chrome.runtime.MessageSender): boolean {
+  try {
+    const url = new URL(sender.url ?? "");
+    url.search = "";
+    url.hash = "";
+    return url.href === chrome.runtime.getURL("options.html");
+  } catch { return false; }
+}
+
+async function notifySettingsChanged(): Promise<void> {
+  try {
+    const tabs = await chrome.tabs.query({});
+    await Promise.allSettled(tabs.filter((tab) => tab.id !== undefined).map((tab) => chrome.tabs.sendMessage(tab.id!, { type: "settings:changed" })));
+  } catch { /* a closed tab cannot receive settings updates */ }
+}
+
+async function testProviderConnection(profileId: string): Promise<void> {
+  const settings = await loadInternalSettings(profileId);
   if (!settings.privacyAccepted) throw new ExtensionError("PERMISSION_REQUIRED", "请先同意使用说明。");
   if (!settings.config) throw new ExtensionError("PERMISSION_REQUIRED", "请先配置模型接口。");
   if (!settings.apiKey) throw new ExtensionError("KEY_REQUIRED", "请先设置 API 密钥。");

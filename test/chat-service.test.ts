@@ -279,3 +279,70 @@ describe("ChatService", () => {
     expect(history.record.messages.map((message) => message.content)).toEqual([payload.question, "old partial"]);
   });
 });
+
+describe("request provider snapshots", () => {
+  it("keeps queued and in-flight requests on their captured provider after switching", async () => {
+    let selected = "a";
+    const configurations = {
+      a: { ...config, baseUrl: "https://a.example.com/v1", model: "a" },
+      b: { ...config, baseUrl: "https://b.example.com/v1", model: "b" },
+    };
+    const releases: Array<(answer: string) => void> = [];
+    const stream = vi.fn<ChatServiceDependencies["stream"]>(() => new Promise((resolve) => releases.push(resolve)));
+    const loadSettings = vi.fn(async (id?: string) => {
+      const key = (id ?? selected) as "a" | "b";
+      return { config: configurations[key], privacyAccepted: true, apiKey: `key-${key}` };
+    });
+    const { service } = createService({ stream, loadSettings });
+    const first = service.send(payload, new AbortController().signal, () => {});
+    await vi.waitFor(() => expect(stream).toHaveBeenCalledOnce());
+    const queued = service.send({ ...payload, question: "queued" }, new AbortController().signal, () => {});
+    await vi.waitFor(() => expect(loadSettings).toHaveBeenCalledTimes(2));
+    selected = "b";
+    const last = service.send({ ...payload, question: "new provider" }, new AbortController().signal, () => {});
+    releases.shift()?.("first");
+    await first;
+    await vi.waitFor(() => expect(stream).toHaveBeenCalledTimes(2));
+    expect(stream.mock.calls[1]![0]).toMatchObject({ model: "a", apiKey: "key-a", url: "https://a.example.com/v1/chat/completions" });
+    releases.shift()?.("queued");
+    await queued;
+    await vi.waitFor(() => expect(stream).toHaveBeenCalledTimes(3));
+    expect(stream.mock.calls[2]![0]).toMatchObject({ model: "b", apiKey: "key-b", url: "https://b.example.com/v1/chat/completions" });
+    releases.shift()?.("last");
+    await last;
+  });
+
+  it("loads the explicit request provider instead of the global selection", async () => {
+    const loadSettings = vi.fn(async () => ({ config, privacyAccepted: true, apiKey: "a-key" }));
+    const { service } = createService({ loadSettings });
+    await service.send({ ...payload, providerId: "a", providerConfig: config }, new AbortController().signal, () => {});
+    expect(loadSettings).toHaveBeenCalledOnce();
+    expect(loadSettings).toHaveBeenCalledWith("a");
+  });
+
+  it.each([
+    { ...config, baseUrl: "https://changed.example.com/v1" },
+    { ...config, model: "changed" },
+    { ...config, contextWindowTokens: 8192 },
+    { ...config, supportsImages: true },
+  ])("rejects a profile edited while preparing attachments before making any request", async (changedConfig) => {
+    const { service, stream, history } = createService({ loadSettings: async () => ({ config: changedConfig, privacyAccepted: true, apiKey: "key" }) });
+    await expect(service.send({ ...payload, providerId: "a", providerConfig: config }, new AbortController().signal, () => {})).rejects.toMatchObject({ code: "PERMISSION_REQUIRED", message: "API 配置已变更，请重新发送。" });
+    expect(stream).not.toHaveBeenCalled();
+    expect(history.record).toBeNull();
+  });
+
+  it("uses one provider snapshot throughout compression even if settings change", async () => {
+    let current = { config: { ...config, contextWindowTokens: 1024 }, privacyAccepted: true, apiKey: "old-key" };
+    const loadSettings = vi.fn(async () => current);
+    const stream = vi.fn<ChatServiceDependencies["stream"]>(async ({ messages }) => {
+      current = { config: { ...config, baseUrl: "https://changed.example.com/v1", model: "changed" }, privacyAccepted: true, apiKey: "new-key" };
+      return typeof messages[0]?.content === "string" && messages[0].content.startsWith("Summarize") ? "summary" : "answer";
+    });
+    const { service } = createService({ loadSettings, stream });
+    await service.send({ ...payload, mainMessages: [{ index: 0, role: "user", content: "x".repeat(5000), links: [] }], compressOldContext: true }, new AbortController().signal, () => {});
+    expect(stream.mock.calls.length).toBeGreaterThan(1);
+    expect(loadSettings).toHaveBeenCalledOnce();
+    for (const [request] of stream.mock.calls) expect(request).toMatchObject({ url: "https://api.example.com/v1/chat/completions", model: "model-a", apiKey: "old-key" });
+  });
+});

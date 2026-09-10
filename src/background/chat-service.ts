@@ -10,7 +10,7 @@ type History = Pick<import("./history-store").HistoryStore, "get" | "put">;
 export type ChatServiceEvent = { type: "accepted"; approximateTokens: number } | { type: "delta"; text: string };
 export type ChatServiceDependencies = {
   history: History;
-  loadSettings: () => Promise<InternalSettings>;
+  loadSettings: (providerId?: string) => Promise<InternalSettings>;
   hasHostPermission: (baseUrl: string) => Promise<boolean>;
   stream: (args: Omit<StreamArgs, "fetcher">) => Promise<string>;
 };
@@ -23,10 +23,17 @@ export class ChatService {
   constructor(private readonly dependencies: ChatServiceDependencies) {}
 
   async send(payload: SendPayload, signal: AbortSignal, onEvent: (event: ChatServiceEvent) => void): Promise<SideChatRecord> {
+    const snapshot = this.dependencies.loadSettings(payload.providerId).then(
+      (settings) => ({ ...settings, config: settings.config ? { ...settings.config } : null }),
+      () => null,
+    );
     const previous = this.tails.get(payload.conversationId) ?? Promise.resolve();
-    const run = previous.catch(() => {}).then(() => {
+    const run = previous.catch(() => {}).then(async () => {
       signal.throwIfAborted();
-      return this.sendOnce(payload, signal, onEvent);
+      const settings = await snapshot;
+      signal.throwIfAborted();
+      if (!settings) throw new ExtensionError("STORAGE_FAILED", "扩展无法加载设置，请重新选择 API。");
+      return this.sendOnce(payload, settings, signal, onEvent);
     });
     const tail = run.then(() => undefined, () => undefined);
     this.tails.set(payload.conversationId, tail);
@@ -34,11 +41,15 @@ export class ChatService {
     return run;
   }
 
-  private async sendOnce(payload: SendPayload, signal: AbortSignal, onEvent: (event: ChatServiceEvent) => void): Promise<SideChatRecord> {
-    let settings: InternalSettings;
-    try { settings = await this.dependencies.loadSettings(); } catch { throw new ExtensionError("STORAGE_FAILED", "扩展无法加载设置。"); }
+  private async sendOnce(payload: SendPayload, settings: InternalSettings, signal: AbortSignal, onEvent: (event: ChatServiceEvent) => void): Promise<SideChatRecord> {
     if (!settings.privacyAccepted || !settings.config) {
       throw new ExtensionError("PERMISSION_REQUIRED", "请先同意使用说明并配置模型服务商，再发送问题。");
+    }
+    if (payload.providerConfig && (payload.providerConfig.baseUrl !== settings.config.baseUrl
+      || payload.providerConfig.model !== settings.config.model
+      || payload.providerConfig.contextWindowTokens !== settings.config.contextWindowTokens
+      || payload.providerConfig.supportsImages !== settings.config.supportsImages)) {
+      throw new ExtensionError("PERMISSION_REQUIRED", "API 配置已变更，请重新发送。");
     }
     if (!settings.apiKey) throw new ExtensionError("KEY_REQUIRED", "请先设置 API 密钥再发送问题。");
     let hasHostPermission = false;

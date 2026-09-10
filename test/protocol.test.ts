@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isRuntimeRequest, isSendPayload, isStreamClientMessage } from "../src/shared/protocol";
+import { isPublicSettings, isRuntimeRequest, isSendPayload, isStreamClientMessage } from "../src/shared/protocol";
 import { t } from "../src/shared/i18n";
 
 describe("runtime protocol guards", () => {
@@ -28,19 +28,19 @@ describe("runtime protocol guards", () => {
     expect(isRuntimeRequest({ type: "ui:set-width", width: 420 })).toBe(false);
   });
   it("accepts only exact zero-payload runtime requests", () => {
-    for (const type of ["settings:get", "key:forget", "provider:test", "ui:get", "history:clear-all"]) {
+    for (const type of ["settings:get", "ui:get", "history:clear-all"]) {
       expect(isRuntimeRequest({ type })).toBe(true);
       expect(isRuntimeRequest({ type, url: "https://attacker.invalid" })).toBe(false);
     }
   });
   it("accepts only complete provider configuration when saving settings", () => {
     const config = { baseUrl: "https://api.example.com/v1", model: "model-a", contextWindowTokens: 4096, supportsImages: false };
-    expect(isRuntimeRequest({ type: "settings:save", config, privacyAccepted: true })).toBe(true);
-    expect(isRuntimeRequest({ type: "settings:save", config: {}, privacyAccepted: true })).toBe(false);
-    expect(isRuntimeRequest({ type: "settings:save", config: { ...config, model: " " }, privacyAccepted: true })).toBe(false);
-    expect(isRuntimeRequest({ type: "settings:save", config: { ...config, contextWindowTokens: 1.5 }, privacyAccepted: true })).toBe(false);
-    expect(isRuntimeRequest({ type: "settings:save", config: { ...config, supportsImages: "yes" }, privacyAccepted: true })).toBe(false);
-    expect(isRuntimeRequest({ type: "settings:save", config: { ...config, extra: true }, privacyAccepted: true })).toBe(false);
+    expect(isRuntimeRequest({ type: "settings:save", name: "API A", config, privacyAccepted: true })).toBe(true);
+    expect(isRuntimeRequest({ type: "settings:save", name: "API A", config: {}, privacyAccepted: true })).toBe(false);
+    expect(isRuntimeRequest({ type: "settings:save", name: "API A", config: { ...config, model: " " }, privacyAccepted: true })).toBe(false);
+    expect(isRuntimeRequest({ type: "settings:save", name: "API A", config: { ...config, contextWindowTokens: 1.5 }, privacyAccepted: true })).toBe(false);
+    expect(isRuntimeRequest({ type: "settings:save", name: "API A", config: { ...config, supportsImages: "yes" }, privacyAccepted: true })).toBe(false);
+    expect(isRuntimeRequest({ type: "settings:save", name: "API A", config: { ...config, extra: true }, privacyAccepted: true })).toBe(false);
   });
 });
 
@@ -91,5 +91,52 @@ describe("copy", () => {
   it("provides the composer placeholder", () => {
     expect(t("composerPlaceholder", "en-US")).toBe("针对所选内容提问……");
     expect(t("composerPlaceholder", "zh-CN")).toBe("针对所选内容提问……");
+  });
+});
+
+
+describe("multiple API protocol", () => {
+  const config = { baseUrl: "https://api.example.com/v1", model: "a", contextWindowTokens: 4096, supportsImages: false };
+  const profile = { id: "a", name: "API A", config, hasSessionKey: true };
+  const settings = { profiles: [profile], activeProviderId: "a", config, privacyAccepted: true, hasSessionKey: true };
+
+  it("requires explicit IDs for profile operations and rejects extra key fields", () => {
+    for (const type of ["settings:select", "settings:delete", "key:forget", "provider:test"]) {
+      expect(isRuntimeRequest({ type, profileId: "a" })).toBe(true);
+      expect(isRuntimeRequest({ type })).toBe(false);
+      expect(isRuntimeRequest({ type, profileId: " " })).toBe(false);
+      expect(isRuntimeRequest({ type, profileId: "a", apiKey: "unexpected" })).toBe(false);
+    }
+    expect(isRuntimeRequest({ type: "key:set", profileId: "a", apiKey: "secret" })).toBe(true);
+    expect(isRuntimeRequest({ type: "key:set", apiKey: "secret" })).toBe(false);
+  });
+
+  it("accepts named atomic profile saves, including blank keys and optional IDs", () => {
+    const request = { type: "settings:save", name: "A", config, privacyAccepted: true };
+    expect(isRuntimeRequest(request)).toBe(true);
+    expect(isRuntimeRequest({ ...request, profileId: "a", apiKey: "" })).toBe(true);
+    expect(isRuntimeRequest({ ...request, name: " " })).toBe(false);
+    expect(isRuntimeRequest({ ...request, name: "x".repeat(81) })).toBe(false);
+    expect(isRuntimeRequest({ ...request, profileId: "" })).toBe(false);
+    expect(isRuntimeRequest({ ...request, apiKey: null })).toBe(false);
+  });
+
+  it("validates active-profile consistency and rejects secret-bearing public responses", () => {
+    expect(isPublicSettings(settings)).toBe(true);
+    expect(isPublicSettings({ profiles: [], activeProviderId: null, config: null, privacyAccepted: false, hasSessionKey: false })).toBe(true);
+    expect(isPublicSettings({ ...settings, activeProviderId: "unknown" })).toBe(false);
+    expect(isPublicSettings({ ...settings, profiles: [profile, profile] })).toBe(false);
+    expect(isPublicSettings({ ...settings, hasSessionKey: false })).toBe(false);
+    expect(isPublicSettings({ ...settings, config: { ...config, model: "b" } })).toBe(false);
+    expect(isPublicSettings({ ...settings, profiles: [{ ...profile, apiKey: "secret" }] })).toBe(false);
+    expect(isPublicSettings({ ...settings, apiKey: "secret" })).toBe(false);
+  });
+
+  it("accepts a request-bound provider ID and config, but rejects unbound or invalid config", () => {
+    expect(isSendPayload({ ...validPayload(), providerId: "a", providerConfig: config })).toBe(true);
+    expect(isSendPayload({ ...validPayload(), providerId: "a" })).toBe(true);
+    expect(isSendPayload({ ...validPayload(), providerId: "" })).toBe(false);
+    expect(isSendPayload({ ...validPayload(), providerConfig: config })).toBe(false);
+    expect(isSendPayload({ ...validPayload(), providerId: "a", providerConfig: { ...config, apiKey: "secret" } })).toBe(false);
   });
 });

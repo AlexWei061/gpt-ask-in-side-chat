@@ -1,4 +1,4 @@
-import type { QuoteReference, SideMessage, WindowGeometry } from "../../shared/types";
+import type { PublicProviderProfile, QuoteReference, SideMessage, WindowGeometry } from "../../shared/types";
 import { renderMarkdown } from "./markdown";
 import { sidePanelStyles } from "./styles";
 import { watchPageTheme } from "../../shared/theme";
@@ -11,6 +11,7 @@ export interface SidePanelOptions {
   onStop?: () => void;
   onClear?: () => void;
   onSettingsClose?: () => void;
+  onProviderChange?: (profileId: string) => void;
   onGeometryChange?: (geometry: WindowGeometry) => void;
 }
 
@@ -45,6 +46,8 @@ export class SidePanel {
   private error: PanelError | null = null;
   private lastSubmission: PanelSend | null = null;
   private contextSummary: PanelContextSummary | null = null;
+  private profiles: PublicProviderProfile[] = [];
+  private activeProviderId: string | null = null;
   private busy = false;
   private accepted = false;
   private stream = "";
@@ -140,7 +143,13 @@ export class SidePanel {
 
   setContextSummary(contextSummary: PanelContextSummary): void {
     this.contextSummary = contextSummary;
-    this.render();
+    this.syncContextSummary();
+  }
+
+  setProviders(profiles: PublicProviderProfile[], activeProviderId: string | null): void {
+    this.profiles = profiles;
+    this.activeProviderId = activeProviderId;
+    this.syncProviders();
   }
 
   setExtractionError(capturedMessages: number, hasConversationId: boolean): void {
@@ -164,7 +173,7 @@ export class SidePanel {
 
   setNotice(message: string): void {
     this.notice = message;
-    this.render();
+    this.syncStatus();
   }
 
   resetRequest(): void {
@@ -523,27 +532,35 @@ export class SidePanel {
       return;
     }
 
-    if (this.contextSummary) {
-      const summary = this.document.createElement("div");
-      summary.className = "context-summary";
-      const limit = this.contextSummary.contextWindowTokens > 0 ? this.contextSummary.contextWindowTokens.toLocaleString("en-US") : "尚未配置";
-      const approximate = this.contextSummary.approximateTokens === undefined ? "发送时计算" : this.contextSummary.approximateTokens.toLocaleString("en-US");
-      const overview = this.document.createElement("div");
-      overview.className = "context-overview";
-      const model = this.document.createElement("span");
-      model.className = "model-name";
-      model.textContent = this.contextSummary.model;
-      model.title = `模型：${this.contextSummary.model}`;
-      const captured = this.document.createElement("span");
-      captured.textContent = `页面消息：${this.contextSummary.capturedMessages} 条`;
-      overview.append(model, captured);
-      const destination = this.document.createElement("div");
-      destination.textContent = `目标：${this.contextSummary.endpointOrigin}`;
-      const budget = this.document.createElement("div");
-      budget.textContent = `预计词元：${approximate} / ${limit}`;
-      summary.append(overview, destination, budget);
-      panel.append(summary);
-    }
+    const summary = this.document.createElement("div");
+    summary.className = "context-summary";
+    const providerRow = this.document.createElement("div");
+    providerRow.className = "provider-row";
+    const providerLabel = this.document.createElement("label");
+    providerLabel.htmlFor = "side-chat-provider";
+    providerLabel.textContent = "API";
+    const providerSelect = this.document.createElement("select");
+    providerSelect.id = providerLabel.htmlFor;
+    providerSelect.dataset.providerSelect = "true";
+    providerSelect.setAttribute("aria-label", "切换 API 配置");
+    providerSelect.addEventListener("change", () => {
+      if (!this.profiles.some((profile) => profile.id === providerSelect.value)) return;
+      this.activeProviderId = providerSelect.value;
+      this.syncProviders();
+      this.options.onProviderChange?.(this.activeProviderId);
+    });
+    const configureProvider = this.button("去设置", "configure-provider", () => {
+      this.settingsOpen = true;
+      this.render();
+    });
+    providerRow.append(providerLabel, providerSelect, configureProvider);
+    const providerNotice = this.document.createElement("div");
+    providerNotice.dataset.providerNotice = "true";
+    providerNotice.setAttribute("aria-live", "polite");
+    const summaryDetails = this.document.createElement("div");
+    summaryDetails.dataset.contextDetails = "true";
+    summary.append(providerRow, providerNotice, summaryDetails);
+    panel.append(summary);
 
     const list = this.document.createElement("div");
     list.className = "messages";
@@ -577,24 +594,6 @@ export class SidePanel {
     const status = this.document.createElement("div");
     status.className = "status";
     status.setAttribute("aria-live", "polite");
-    if (this.error) {
-      status.setAttribute("role", "alert");
-      status.textContent = this.error.message;
-      if (this.error.diagnostic) {
-        const diagnostic = this.error.diagnostic;
-        status.append(this.button("复制诊断信息", "copy-diagnostics", () => {
-          void this.document.defaultView?.navigator.clipboard?.writeText(diagnostic).then(
-            () => this.setNotice("诊断信息已复制。"),
-            () => this.setNotice("无法复制诊断信息。"),
-          );
-        }));
-      }
-      if (this.error.retryable && this.lastSubmission) status.append(this.button("重试", "retry", () => this.send(this.lastSubmission!)));
-    } else if (this.notice) {
-      status.textContent = this.notice;
-    } else if (this.busy) {
-      status.textContent = "正在生成……";
-    }
     panel.append(status);
 
     const form = this.document.createElement("form");
@@ -639,8 +638,82 @@ export class SidePanel {
     });
     panel.append(form);
     this.root.append(panel);
+    this.syncProviders();
+    this.syncContextSummary();
+    this.syncStatus();
     this.syncActiveQuote();
     this.syncGeometry();
+  }
+
+  private syncProviders(): void {
+    const select = this.root.querySelector<HTMLSelectElement>("[data-provider-select]");
+    if (!select) return;
+    const active = this.profiles.find((profile) => profile.id === this.activeProviderId);
+    const options = this.profiles.map((profile) => {
+      const option = this.document.createElement("option");
+      option.value = profile.id;
+      option.textContent = `${profile.name} · ${profile.config.model}`;
+      return option;
+    });
+    if (!active) {
+      const placeholder = this.document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = this.profiles.length ? "请选择 API 配置" : "尚未配置";
+      placeholder.disabled = true;
+      options.unshift(placeholder);
+    }
+    select.replaceChildren(...options);
+    select.value = active?.id ?? "";
+    select.title = active ? `${active.name} · ${active.config.model}` : "尚未配置 API";
+    select.disabled = this.profiles.length === 0;
+    const configure = this.root.querySelector<HTMLButtonElement>("[data-action=configure-provider]")!;
+    configure.hidden = this.profiles.length > 0;
+    configure.disabled = this.busy;
+    this.root.querySelector<HTMLElement>("[data-provider-notice]")!.textContent = this.busy
+      ? "切换后从下一条消息生效。"
+      : "";
+  }
+
+  private syncContextSummary(): void {
+    const details = this.root.querySelector<HTMLElement>("[data-context-details]");
+    if (!details) return;
+    details.replaceChildren();
+    if (!this.contextSummary) return;
+    const limit = this.contextSummary.contextWindowTokens > 0 ? this.contextSummary.contextWindowTokens.toLocaleString("en-US") : "尚未配置";
+    const approximate = this.contextSummary.approximateTokens === undefined ? "发送时计算" : this.contextSummary.approximateTokens.toLocaleString("en-US");
+    const captured = this.document.createElement("div");
+    captured.textContent = `页面消息：${this.contextSummary.capturedMessages} 条 · 模型：${this.contextSummary.model}`;
+    const destination = this.document.createElement("div");
+    destination.textContent = `目标：${this.contextSummary.endpointOrigin}`;
+    destination.title = `模型：${this.contextSummary.model}`;
+    const budget = this.document.createElement("div");
+    budget.textContent = `预计词元：${approximate} / ${limit}`;
+    details.append(captured, destination, budget);
+  }
+
+  private syncStatus(): void {
+    const status = this.root.querySelector<HTMLElement>(".status");
+    if (!status) return;
+    status.replaceChildren();
+    status.removeAttribute("role");
+    if (this.error) {
+      status.setAttribute("role", "alert");
+      status.textContent = this.error.message;
+      if (this.error.diagnostic) {
+        const diagnostic = this.error.diagnostic;
+        status.append(this.button("复制诊断信息", "copy-diagnostics", () => {
+          void this.document.defaultView?.navigator.clipboard?.writeText(diagnostic).then(
+            () => this.setNotice("诊断信息已复制。"),
+            () => this.setNotice("无法复制诊断信息。"),
+          );
+        }));
+      }
+      if (this.error.retryable && this.lastSubmission) status.append(this.button("重试", "retry", () => this.send(this.lastSubmission!)));
+    } else if (this.notice) {
+      status.textContent = this.notice;
+    } else if (this.busy) {
+      status.textContent = "正在生成……";
+    }
   }
 
   private syncActiveQuote(): void {

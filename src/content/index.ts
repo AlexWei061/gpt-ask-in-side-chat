@@ -1,12 +1,11 @@
-import { isProviderConfig, type RuntimeResponse, type StreamServerMessage } from "../shared/protocol";
-import type { ProviderConfig, SideChatRecord, WindowGeometry } from "../shared/types";
+import { isPublicSettings, type RuntimeResponse, type StreamServerMessage } from "../shared/protocol";
+import type { PublicSettings, SideChatRecord, WindowGeometry } from "../shared/types";
 import type { ExtensionErrorCode } from "../shared/errors";
 import { ChatGptPageAdapter } from "./page-adapter";
 import { extractAttachmentDescriptors, prepareFile, type AttachmentDescriptor } from "./attachments";
 import { SelectionController } from "./selection";
 import { SidePanel, type PanelContextSummary, type PanelSend } from "./ui/side-panel";
 
-type PublicSettings = { privacyAccepted: boolean; config: ProviderConfig | null };
 type UiPreferences = { windowGeometry: WindowGeometry };
 
 function request<T>(message: unknown, valid: (value: unknown) => value is T = ((_: unknown): _ is T => true)): Promise<T> {
@@ -28,7 +27,7 @@ export function bootstrap(): Promise<void> {
   return promise;
 }
 async function bootstrapImpl(): Promise<void> {
-  let publicSettings = await request<PublicSettings>({ type: "settings:get" }, isSettings);
+  let publicSettings = await request<PublicSettings>({ type: "settings:get" }, isPublicSettings);
   if (!publicSettings.privacyAccepted) { delete (document as Document & { [BOOTSTRAP_KEY]?: Promise<void> })[BOOTSTRAP_KEY]; return; }
   const adapter = new ChatGptPageAdapter(document);
   let stream: { port: chrome.runtime.Port; requestId: string; conversationId: string } | null = null;
@@ -36,6 +35,8 @@ async function bootstrapImpl(): Promise<void> {
   let generation = 0;
   let disposed = false;
   let settingsRefresh: Promise<void> | null = null;
+  let failedSettingsUpdates = 0;
+  let requestSettings: PublicSettings | null = null;
   const disconnectStream = (abort = true) => {
     attachmentController?.abort();
     attachmentController = null;
@@ -47,27 +48,48 @@ async function bootstrapImpl(): Promise<void> {
   };
   const panel = new SidePanel(document, {
     onSend: (submission) => { void start(submission); },
-    onStop: () => { generation += 1; disconnectStream(); panel.stopRequest(); },
+    onStop: () => { generation += 1; disconnectStream(); panel.stopRequest(); finishRequest(); },
     onGeometryChange: (geometry) => { void request({ type: "ui:set-geometry", geometry }).catch(() => panel.setNotice("无法保存浮窗位置和大小。")); },
     onClear: () => clear(),
-    onSettingsClose: () => {
-      settingsRefresh = request<PublicSettings>({ type: "settings:get" }, isSettings).then((settings) => {
-        publicSettings = settings;
-        panel.setContextSummary(contextSummary(adapter.getMessageElements().length));
-      }).catch(() => panel.setNotice("无法刷新模型设置，请重试。"));
-    },
+    onSettingsClose: () => refreshSettings(),
+    onProviderChange: (profileId) => refreshSettings({ type: "settings:select", profileId }),
   });
-  const contextSummary = (capturedMessages: number): PanelContextSummary => ({
-    capturedMessages,
-    endpointOrigin: publicSettings.config ? new URL(publicSettings.config.baseUrl).origin : "尚未配置",
-    model: publicSettings.config?.model ?? "尚未配置",
-    contextWindowTokens: publicSettings.config?.contextWindowTokens ?? 0,
-  });
+  const contextSummary = (capturedMessages: number): PanelContextSummary => {
+    const settings = requestSettings ?? publicSettings;
+    return {
+      capturedMessages,
+      endpointOrigin: settings.config ? new URL(settings.config.baseUrl).origin : "尚未配置",
+      model: settings.config?.model ?? "尚未配置",
+      contextWindowTokens: settings.config?.contextWindowTokens ?? 0,
+    };
+  };
+  function refreshSettings(message: { type: "settings:get" } | { type: "settings:select"; profileId: string } = { type: "settings:get" }): void {
+    const pending = (settingsRefresh ?? Promise.resolve()).then(async () => {
+      if (disposed) return;
+      const settings = await request<PublicSettings>(message, isPublicSettings);
+      if (disposed) return;
+      publicSettings = settings;
+      panel.setProviders(settings.profiles, settings.activeProviderId);
+      if (!requestSettings) panel.setContextSummary(contextSummary(adapter.getMessageElements().length));
+    }).catch(() => {
+      if (disposed) return;
+      failedSettingsUpdates += 1;
+      panel.setProviders(publicSettings.profiles, publicSettings.activeProviderId);
+      panel.setNotice(message.type === "settings:select" ? "切换 API 失败，仍使用原配置，请重试。" : "无法刷新模型设置，请重试。");
+    });
+    settingsRefresh = pending;
+    void pending.finally(() => { if (settingsRefresh === pending) settingsRefresh = null; });
+  }
+  function finishRequest(): void {
+    requestSettings = null;
+    panel.setContextSummary(contextSummary(adapter.getMessageElements().length));
+  }
+  panel.setProviders(publicSettings.profiles, publicSettings.activeProviderId);
   const selection = new SelectionController(document, (quote) => {
     panel.open(quote, contextSummary(adapter.getMessageElements().length));
   }, (quote) => panel.setQuote(quote));
   async function loadConversation(): Promise<void> {
-    const token = ++generation; disconnectStream();
+    const token = ++generation; disconnectStream(); requestSettings = null;
     const conversationId = adapter.getConversationId(); panel.setConversation(conversationId, []);
     panel.setContextSummary(contextSummary(adapter.getMessageElements().length));
     if (!conversationId) return;
@@ -78,26 +100,35 @@ async function bootstrapImpl(): Promise<void> {
   }
   async function clear(): Promise<void> {
     const token = ++generation; const id = adapter.getConversationId(); if (!id) return;
-    disconnectStream(); panel.resetRequest();
+    disconnectStream(); panel.resetRequest(); finishRequest();
     try { await request({ type: "history:clear", conversationId: id }); if (!disposed && token === generation && adapter.getConversationId() === id) panel.setMessages([]); }
     catch { if (!disposed && token === generation && adapter.getConversationId() === id) panel.setNotice("无法清空侧边对话记录。"); }
   }
   async function start(submission: PanelSend): Promise<void> {
     const token = ++generation;
-    if (settingsRefresh) { await settingsRefresh; settingsRefresh = null; }
+    const failuresBeforeWait = failedSettingsUpdates;
+    while (settingsRefresh) await settingsRefresh;
     if (disposed || token !== generation) return;
+    if (failedSettingsUpdates !== failuresBeforeWait) {
+      panel.setError({ message: "无法确认 API 切换结果，本次问题未发送。请确认当前配置后重试。", retryable: true });
+      return;
+    }
+    // Freeze the selected profile before attachment consent; later switches affect the next send.
+    const settings = publicSettings;
+    requestSettings = settings;
     const conversationId = adapter.getConversationId(); const elements = adapter.getMessageElements(); const extraction = adapter.extractConversation(elements);
     panel.setContextSummary(contextSummary(extraction.messages.length));
-    if (!conversationId || !extraction.certain || extraction.messages.length === 0) { panel.setExtractionError(extraction.messages.length, Boolean(conversationId)); return; }
+    if (!conversationId || !extraction.certain || extraction.messages.length === 0) { panel.setExtractionError(extraction.messages.length, Boolean(conversationId)); finishRequest(); return; }
+    if (!settings.activeProviderId || !settings.config) { panel.setError({ message: "请先在设置中添加并选择 API 配置。", retryable: true }); finishRequest(); return; }
     const descriptors = extractAttachmentDescriptors(elements);
     let attachments: import("../shared/types").PreparedAttachment[] = [];
     if (descriptors.length > 0) {
       const controller = new AbortController();
       attachmentController = controller;
       try {
-        attachments = await resolveAttachments(descriptors, publicSettings.config?.supportsImages === true, panel, controller.signal);
+        attachments = await resolveAttachments(descriptors, settings.config.supportsImages, panel, controller.signal);
       } catch (error) {
-        if (!disposed && token === generation) panel.setError({ message: error instanceof Error ? error.message : "无法准备附件。", retryable: true });
+        if (!disposed && token === generation) { panel.setError({ message: error instanceof Error ? error.message : "无法准备附件。", retryable: true }); finishRequest(); }
         return;
       } finally {
         if (attachmentController === controller) attachmentController = null;
@@ -105,29 +136,33 @@ async function bootstrapImpl(): Promise<void> {
     }
     if (disposed || token !== generation || adapter.getConversationId() !== conversationId) return;
     disconnectStream(); const requestId = crypto.randomUUID(); let port: chrome.runtime.Port;
-    try { port = chrome.runtime.connect({ name: "side-chat-stream" }); } catch { panel.setError({ message: "无法启动侧边对话请求。", retryable: true }); return; }
+    try { port = chrome.runtime.connect({ name: "side-chat-stream" }); } catch { panel.setError({ message: "无法启动侧边对话请求。", retryable: true }); finishRequest(); return; }
     stream = { port, requestId, conversationId };
     try { port.onMessage.addListener((raw: unknown) => {
       const candidate = raw as { requestId?: unknown; type?: unknown } | null;
       if (!stream || stream.port !== port || candidate?.requestId !== stream.requestId) return;
-      if (!isStreamEvent(raw)) { panel.setError({ message: "侧边对话响应无效。", retryable: true }); disconnectStream(false); return; }
+      if (!isStreamEvent(raw)) { panel.setError({ message: "侧边对话响应无效。", retryable: true }); disconnectStream(false); finishRequest(); return; }
       const event = raw;
       if (event.type === "accepted") panel.setAccepted(event.approximateTokens);
       else if (event.type === "delta") panel.appendDelta(event.text);
-      else if (event.type === "done") { if (event.record.conversationId === stream.conversationId) panel.complete(event.record.messages); else panel.setError({ message: "侧边对话响应无效。", retryable: true }); disconnectStream(false); }
-      else if (event.type === "error") { panel.setError({ message: event.error.message, retryable: event.error.retryable }); disconnectStream(false); }
+      else if (event.type === "done") { if (event.record.conversationId === stream.conversationId) panel.complete(event.record.messages); else panel.setError({ message: "侧边对话响应无效。", retryable: true }); disconnectStream(false); finishRequest(); }
+      else if (event.type === "error") { panel.setError({ message: event.error.message, retryable: event.error.retryable }); disconnectStream(false); finishRequest(); }
     });
-    port.onDisconnect.addListener(() => { if (stream?.port === port) { stream = null; panel.setError({ message: "侧边对话连接意外中断。", retryable: true }); } });
-    port.postMessage({ type: "start", requestId, payload: { conversationId, mainMessages: extraction.messages, ...submission, attachments } }); }
-    catch { panel.setError({ message: "无法启动侧边对话请求。", retryable: true }); disconnectStream(false); }
+    port.onDisconnect.addListener(() => { if (stream?.port === port) { stream = null; panel.setError({ message: "侧边对话连接意外中断。", retryable: true }); finishRequest(); } });
+    port.postMessage({ type: "start", requestId, payload: { conversationId, providerId: settings.activeProviderId, providerConfig: settings.config, mainMessages: extraction.messages, ...submission, attachments } }); }
+    catch { panel.setError({ message: "无法启动侧边对话请求。", retryable: true }); disconnectStream(false); finishRequest(); }
   }
   try { panel.setGeometry((await request<UiPreferences>({ type: "ui:get" }, isUi)).windowGeometry); } catch { panel.setError({ message: "无法加载浮窗偏好设置。", retryable: false }); }
   let url = document.location.href;
   const checkNavigation = () => { if (document.location.href !== url) { url = document.location.href; void loadConversation(); } };
   const observer = new MutationObserver(checkNavigation); observer.observe(document.documentElement, { childList: true, subtree: true });
   document.defaultView?.addEventListener("popstate", checkNavigation);
-  const pagehide = (event: PageTransitionEvent) => { if (event.persisted) { generation += 1; disconnectStream(); panel.resetRequest(); return; } disposed = true; observer.disconnect(); document.defaultView?.removeEventListener("popstate", checkNavigation); document.defaultView?.removeEventListener("pagehide", pagehide); document.defaultView?.removeEventListener("pageshow", pageshow); disconnectStream(); selection.destroy(); panel.destroy(); delete (document as Document & { [BOOTSTRAP_KEY]?: Promise<void> })[BOOTSTRAP_KEY]; };
-  const pageshow = (event: PageTransitionEvent) => { if (event.persisted) void loadConversation(); };
+  const settingsChanged = (message: unknown) => {
+    if (message && typeof message === "object" && (message as { type?: unknown }).type === "settings:changed") refreshSettings();
+  };
+  chrome.runtime.onMessage.addListener(settingsChanged);
+  const pagehide = (event: PageTransitionEvent) => { if (event.persisted) { generation += 1; disconnectStream(); panel.resetRequest(); finishRequest(); return; } disposed = true; observer.disconnect(); document.defaultView?.removeEventListener("popstate", checkNavigation); document.defaultView?.removeEventListener("pagehide", pagehide); document.defaultView?.removeEventListener("pageshow", pageshow); chrome.runtime.onMessage.removeListener(settingsChanged); disconnectStream(); selection.destroy(); panel.destroy(); delete (document as Document & { [BOOTSTRAP_KEY]?: Promise<void> })[BOOTSTRAP_KEY]; };
+  const pageshow = (event: PageTransitionEvent) => { if (event.persisted) { refreshSettings(); void loadConversation(); } };
   document.defaultView?.addEventListener("pagehide", pagehide); document.defaultView?.addEventListener("pageshow", pageshow);
   await loadConversation();
 }
@@ -204,9 +239,6 @@ function isRuntimeError(value: unknown): value is { code: ExtensionErrorCode; me
     && isErrorCode((value as { code?: unknown }).code)
     && typeof (value as { message?: unknown }).message === "string"
     && (!("retryable" in value) || typeof (value as { retryable?: unknown }).retryable === "boolean"));
-}
-function isSettings(value: unknown): value is PublicSettings {
-  return Boolean(value && typeof value === "object" && typeof (value as PublicSettings).privacyAccepted === "boolean" && (value as { config?: unknown }).config !== undefined && ((value as PublicSettings).config === null || isProviderConfig((value as PublicSettings).config)));
 }
 function isUi(value: unknown): value is UiPreferences {
   if (!value || typeof value !== "object") return false;

@@ -1,12 +1,14 @@
 import type { ExtensionErrorCode } from "./errors";
-import type { MainMessage, PreparedAttachment, ProviderConfig, QuoteReference, SendPayload, SideChatRecord, WindowGeometry } from "./types";
+import type { MainMessage, PreparedAttachment, ProviderConfig, PublicSettings, QuoteReference, SendPayload, SideChatRecord, WindowGeometry } from "./types";
 
 export type RuntimeRequest =
   | { type: "settings:get" }
-  | { type: "settings:save"; config: ProviderConfig; privacyAccepted: boolean }
-  | { type: "key:set"; apiKey: string }
-  | { type: "key:forget" }
-  | { type: "provider:test" }
+  | { type: "settings:save"; profileId?: string; name: string; config: ProviderConfig; privacyAccepted: boolean; apiKey?: string }
+  | { type: "settings:select"; profileId: string }
+  | { type: "settings:delete"; profileId: string }
+  | { type: "key:set"; profileId: string; apiKey: string }
+  | { type: "key:forget"; profileId: string }
+  | { type: "provider:test"; profileId: string }
   | { type: "ui:get" }
   | { type: "ui:set-geometry"; geometry: WindowGeometry }
   | { type: "history:load"; conversationId: string }
@@ -38,11 +40,16 @@ function isNonEmptyString(value: unknown): value is string {
 export function isRuntimeRequest(value: unknown): value is RuntimeRequest {
   if (!isObject(value) || typeof value.type !== "string") return false;
   switch (value.type) {
-    case "settings:get": case "key:forget": case "provider:test": case "ui:get": case "history:clear-all": return Object.keys(value).length === 1;
-    case "key:set": return hasOnlyKeys(value, ["type", "apiKey"]) && isNonEmptyString(value.apiKey);
+    case "settings:get": case "ui:get": case "history:clear-all": return Object.keys(value).length === 1;
+    case "settings:select": case "settings:delete": case "key:forget": case "provider:test": return hasOnlyKeys(value, ["type", "profileId"]) && isProfileId(value.profileId);
+    case "key:set": return hasOnlyKeys(value, ["type", "profileId", "apiKey"]) && isProfileId(value.profileId) && isNonEmptyString(value.apiKey);
     case "ui:set-geometry": return hasOnlyKeys(value, ["type", "geometry"]) && isWindowGeometry(value.geometry);
     case "history:load": case "history:clear": return hasOnlyKeys(value, ["type", "conversationId"]) && isNonEmptyString(value.conversationId);
-    case "settings:save": return hasOnlyKeys(value, ["type", "config", "privacyAccepted"]) && isProviderConfig(value.config) && typeof value.privacyAccepted === "boolean";
+    case "settings:save": return hasOnlyKeys(value, ["type", "profileId", "name", "config", "privacyAccepted", "apiKey"])
+      && (value.profileId === undefined || isProfileId(value.profileId))
+      && typeof value.name === "string" && value.name.trim().length > 0 && value.name.trim().length <= 80
+      && isProviderConfig(value.config) && typeof value.privacyAccepted === "boolean"
+      && (value.apiKey === undefined || typeof value.apiKey === "string");
     default: return false;
   }
 }
@@ -58,7 +65,9 @@ export function isStreamClientMessage(value: unknown): value is StreamClientMess
 }
 
 export function isSendPayload(value: unknown): value is SendPayload {
-  if (!isObject(value) || !hasOnlyKeys(value, ["conversationId", "mainMessages", "quote", "question", "attachments", "compressOldContext"])) return false;
+  if (!isObject(value) || !hasOnlyKeys(value, ["providerId", "providerConfig", "conversationId", "mainMessages", "quote", "question", "attachments", "compressOldContext"])) return false;
+  if (value.providerId !== undefined && !isProfileId(value.providerId)) return false;
+  if (value.providerConfig !== undefined && (value.providerId === undefined || !isProviderConfig(value.providerConfig))) return false;
   if (!isNonEmptyString(value.conversationId)
     || !Array.isArray(value.mainMessages) || value.mainMessages.length === 0 || !value.mainMessages.every(isMainMessage)
     || (value.quote !== undefined && !isQuoteReference(value.quote))
@@ -109,4 +118,25 @@ export function isProviderConfig(value: unknown): value is ProviderConfig {
     && typeof value.model === "string" && value.model.trim().length > 0
     && typeof value.contextWindowTokens === "number" && Number.isFinite(value.contextWindowTokens) && Number.isInteger(value.contextWindowTokens) && value.contextWindowTokens > 0
     && typeof value.supportsImages === "boolean";
+}
+
+function isProfileId(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0 && value.length <= 128;
+}
+
+export function isPublicSettings(value: unknown): value is PublicSettings {
+  if (!isObject(value) || !hasOnlyKeys(value, ["profiles", "activeProviderId", "config", "privacyAccepted", "hasSessionKey"])
+    || !Array.isArray(value.profiles) || typeof value.privacyAccepted !== "boolean" || typeof value.hasSessionKey !== "boolean") return false;
+  if (!value.profiles.every((profile) => isObject(profile)
+    && hasOnlyKeys(profile, ["id", "name", "config", "hasSessionKey"])
+    && isProfileId(profile.id) && typeof profile.name === "string" && profile.name.trim().length > 0
+    && isProviderConfig(profile.config) && typeof profile.hasSessionKey === "boolean")) return false;
+  const profiles = value.profiles as PublicSettings["profiles"];
+  if (new Set(profiles.map((profile) => profile.id)).size !== profiles.length) return false;
+  if (value.activeProviderId === null) return profiles.length === 0 && value.config === null && value.hasSessionKey === false;
+  const active = profiles.find((profile) => profile.id === value.activeProviderId);
+  return Boolean(active && isProviderConfig(value.config)
+    && active.hasSessionKey === value.hasSessionKey
+    && active.config.baseUrl === value.config.baseUrl && active.config.model === value.config.model
+    && active.config.contextWindowTokens === value.config.contextWindowTokens && active.config.supportsImages === value.config.supportsImages);
 }

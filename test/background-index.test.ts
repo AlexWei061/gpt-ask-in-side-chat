@@ -23,16 +23,18 @@ function deferred() {
   return { promise: new Promise<void>((done) => { resolve = done; }), resolve: () => resolve?.() };
 }
 
+const optionsSender = { url: "chrome-extension://test/options.html?embedded=1" };
 const openOptionsPage = vi.fn(async () => {});
 const localGet = vi.fn(async (..._keys: unknown[]): Promise<Record<string, unknown>> => { throw new Error("storage failed"); });
 Object.assign(globalThis, {
   chrome: {
-    runtime: { onInstalled: installed, onMessage: message, onConnect: connect, openOptionsPage, getPlatformInfo: vi.fn(async () => ({})) },
+    runtime: { onInstalled: installed, onMessage: message, onConnect: connect, openOptionsPage, getPlatformInfo: vi.fn(async () => ({})), getURL: (path: string) => `chrome-extension://test/${path}` },
     action: { onClicked: clicked },
     storage: {
       local: { get: localGet, set: vi.fn(), remove: vi.fn(), setAccessLevel: vi.fn() },
     },
     permissions: { contains: vi.fn(async () => true) },
+    tabs: { query: vi.fn(async () => [{ id: 1 }, { id: 2 }]), sendMessage: vi.fn(async () => undefined) },
   },
 });
 
@@ -101,7 +103,7 @@ describe("background listeners", () => {
     localGet.mockResolvedValueOnce({ "provider-config": { baseUrl: "https://api.example.com/v1", model: "model", contextWindowTokens: 4096, supportsImages: false }, "privacy-accepted": true, "provider-api-key": { apiKey: "saved-key", providerBaseUrl: "https://api.example.com/v1" } });
     stream.mockResolvedValueOnce("OK");
     const response = vi.fn();
-    expect(message.listener?.({ type: "provider:test" }, {}, response)).toBe(true);
+    expect(message.listener?.({ type: "provider:test", profileId: "legacy-provider" }, optionsSender, response)).toBe(true);
     await vi.waitFor(() => expect(response).toHaveBeenCalledWith({ ok: true }));
     expect(stream).toHaveBeenCalledWith(expect.objectContaining({
       url: "https://api.example.com/v1/chat/completions",
@@ -114,7 +116,7 @@ describe("background listeners", () => {
   it("refuses a provider test until disclosure, config, and a saved key are present", async () => {
     localGet.mockResolvedValueOnce({ "provider-config": { baseUrl: "https://api.example.com/v1", model: "model", contextWindowTokens: 4096, supportsImages: false }, "privacy-accepted": false });
     const response = vi.fn();
-    message.listener?.({ type: "provider:test" }, {}, response);
+    message.listener?.({ type: "provider:test", profileId: "legacy-provider" }, optionsSender, response);
     await vi.waitFor(() => expect(response).toHaveBeenCalledWith({ ok: false, error: expect.objectContaining({ code: "PERMISSION_REQUIRED" }) }));
     expect(stream).not.toHaveBeenCalled();
   });
@@ -122,7 +124,7 @@ describe("background listeners", () => {
   it("reports a missing runtime host permission before contacting the provider", async () => {
     localGet.mockResolvedValueOnce({ "provider-config": { baseUrl: "https://api.example.com/v1", model: "model", contextWindowTokens: 4096, supportsImages: false }, "privacy-accepted": true, "provider-api-key": { apiKey: "saved-key", providerBaseUrl: "https://api.example.com/v1" } });
     (globalThis.chrome.permissions.contains as ReturnType<typeof vi.fn>).mockResolvedValueOnce(false);
-    const response = vi.fn(); message.listener?.({ type: "provider:test" }, {}, response);
+    const response = vi.fn(); message.listener?.({ type: "provider:test", profileId: "legacy-provider" }, optionsSender, response);
     await vi.waitFor(() => expect(response).toHaveBeenCalledWith({ ok: false, error: expect.objectContaining({ code: "PERMISSION_REQUIRED" }) }));
     expect(stream).not.toHaveBeenCalled();
   });
@@ -217,5 +219,58 @@ describe("background listeners", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("profile runtime routing", () => {
+  const config = { baseUrl: "https://api.example.com/v1", model: "a", contextWindowTokens: 4096, supportsImages: false };
+  const profiles = [
+    { id: "a", name: "API A", config, key: { apiKey: "secret-a", providerBaseUrl: config.baseUrl } },
+    { id: "b", name: "API B", config: { ...config, model: "b" }, key: { apiKey: "secret-b", providerBaseUrl: config.baseUrl } },
+  ];
+  const stored = () => ({ "provider-profiles": { schemaVersion: 1, profiles, activeProviderId: "a", privacyAccepted: true } });
+
+  it("permits content selection and broadcasts only an invalidation signal", async () => {
+    localGet.mockResolvedValueOnce(stored());
+    const response = vi.fn();
+    message.listener?.({ type: "settings:select", profileId: "b" }, { url: "https://chatgpt.com/c/abc" }, response);
+    await vi.waitFor(() => expect(response).toHaveBeenCalledWith({ ok: true, value: expect.objectContaining({ activeProviderId: "b", config: { ...config, model: "b" } }) }));
+    await vi.waitFor(() => expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(1, { type: "settings:changed" }));
+    expect(JSON.stringify(response.mock.calls)).not.toContain("secret");
+    expect(JSON.stringify((chrome.tabs.sendMessage as ReturnType<typeof vi.fn>).mock.calls)).not.toContain("secret");
+  });
+
+  it("restricts save, delete, key changes and provider testing to the options document", () => {
+    for (const request of [
+      { type: "settings:save", name: "API", config, privacyAccepted: true },
+      { type: "settings:delete", profileId: "a" },
+      { type: "key:set", profileId: "a", apiKey: "secret" },
+      { type: "key:forget", profileId: "a" },
+      { type: "provider:test", profileId: "a" },
+    ]) {
+      const response = vi.fn();
+      message.listener?.(request, { url: "https://chatgpt.com/c/abc" }, response);
+      expect(response).toHaveBeenCalledWith({ ok: false, error: expect.objectContaining({ code: "PERMISSION_REQUIRED" }) });
+    }
+    expect(localGet).not.toHaveBeenCalled();
+    expect(stream).not.toHaveBeenCalled();
+  });
+
+  it("tests the requested inactive profile with its own key", async () => {
+    localGet.mockResolvedValueOnce(stored());
+    stream.mockResolvedValueOnce("OK");
+    const response = vi.fn();
+    message.listener?.({ type: "provider:test", profileId: "b" }, optionsSender, response);
+    await vi.waitFor(() => expect(response).toHaveBeenCalledWith({ ok: true }));
+    expect(stream).toHaveBeenCalledWith(expect.objectContaining({ model: "b", apiKey: "secret-b" }));
+  });
+
+  it("returns saved profiles from an options mutation and invalidates existing content views", async () => {
+    localGet.mockResolvedValueOnce(stored());
+    const response = vi.fn();
+    message.listener?.({ type: "settings:save", profileId: "b", name: "Renamed", config, privacyAccepted: true, apiKey: "replacement" }, optionsSender, response);
+    await vi.waitFor(() => expect(response).toHaveBeenCalledWith({ ok: true, value: expect.objectContaining({ activeProviderId: "a", profiles: expect.arrayContaining([expect.objectContaining({ id: "b", name: "Renamed", hasSessionKey: true })]) }) }));
+    await vi.waitFor(() => expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(2, { type: "settings:changed" }));
+    expect(JSON.stringify(response.mock.calls)).not.toContain("replacement");
   });
 });

@@ -1,260 +1,185 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { chatCompletionsUrl, normalizeBaseUrl, permissionPattern } from "../src/background/permissions";
 import {
-  forgetSessionKey,
-  loadInternalSettings,
-  loadUiPreferences,
-  normalizeWindowGeometry,
-  publicSettings,
-  restrictStorageAccess,
-  saveProviderConfig,
-  saveWindowGeometry,
-  setSessionKey,
+  deleteProviderProfile, forgetSessionKey, loadInternalSettings, loadPublicSettings, loadUiPreferences,
+  normalizeWindowGeometry, saveProviderProfile, saveWindowGeometry, selectProviderProfile, setSessionKey,
 } from "../src/background/settings";
+import type { ProviderConfig } from "../src/shared/types";
 
-type StorageMock = {
-  data: Record<string, unknown>;
-  get: ReturnType<typeof vi.fn>;
-  set: ReturnType<typeof vi.fn>;
-  remove: ReturnType<typeof vi.fn>;
-  setAccessLevel: ReturnType<typeof vi.fn>;
-};
-
-function createStorageMock(): StorageMock {
+function createStorageMock() {
   const data: Record<string, unknown> = {};
   return {
     data,
-    get: vi.fn(async (keys: string | string[]) => {
-      const requested = Array.isArray(keys) ? keys : [keys];
-      return Object.fromEntries(requested.flatMap((key) => key in data ? [[key, data[key]]] : []));
-    }),
-    set: vi.fn(async (values: Record<string, unknown>) => Object.assign(data, values)),
-    remove: vi.fn(async (key: string) => { delete data[key]; }),
+    get: vi.fn(async (keys: string | string[]) => Object.fromEntries((Array.isArray(keys) ? keys : [keys]).flatMap((key) => key in data ? [[key, structuredClone(data[key])]] : []))),
+    set: vi.fn(async (values: Record<string, unknown>) => Object.assign(data, structuredClone(values))),
+    remove: vi.fn(async (keys: string | string[]) => { for (const key of Array.isArray(keys) ? keys : [keys]) delete data[key]; }),
     setAccessLevel: vi.fn(async () => undefined),
   };
 }
-
-let local: StorageMock;
-let session: StorageMock;
+let local: ReturnType<typeof createStorageMock>;
+const config: ProviderConfig = { baseUrl: "https://api.example.com/v1", model: "model-a", contextWindowTokens: 128000, supportsImages: false };
+const save = (name: string, apiKey?: string) => saveProviderProfile({ name, config, privacyAccepted: true, ...(apiKey === undefined ? {} : { apiKey }) });
 
 beforeEach(() => {
   local = createStorageMock();
-  session = createStorageMock();
-  Object.defineProperty(globalThis, "chrome", {
-    configurable: true,
-    value: { storage: { local, session } },
-  });
+  Object.defineProperty(globalThis, "chrome", { configurable: true, value: { storage: { local } } });
 });
 
 describe("provider settings", () => {
-  it("allows HTTPS and local HTTP only", () => {
+  it("allows HTTPS and local HTTP only and normalizes provider origins", () => {
     expect(normalizeBaseUrl("https://api.example.com/v1/")).toBe("https://api.example.com/v1");
     expect(normalizeBaseUrl("http://localhost:11434/v1")).toBe("http://localhost:11434/v1");
     expect(() => normalizeBaseUrl("http://api.example.com/v1")).toThrow(/HTTPS/);
-  });
-
-  it("requests only the normalized provider origin", () => {
     expect(permissionPattern("https://api.example.com/v1")).toBe("https://api.example.com/*");
-  });
-
-  it("rejects credentials and removes every trailing path slash", () => {
     expect(() => normalizeBaseUrl("https://key:secret@api.example.com/v1")).toThrow(/凭据/);
-    expect(chatCompletionsUrl("https://api.example.com/v1///")).toBe(
-      "https://api.example.com/v1/chat/completions",
-    );
+    expect(chatCompletionsUrl("https://api.example.com/v1///")).toBe("https://api.example.com/v1/chat/completions");
   });
 
-  it("never returns the API key in public settings", () => {
-    expect(publicSettings({
-      config: {
-        baseUrl: "https://api.example.com/v1",
-        model: "model-a",
-        contextWindowTokens: 128000,
-        supportsImages: false,
-      },
-      privacyAccepted: true,
-      apiKey: "secret",
-    })).toEqual({
-      config: {
-        baseUrl: "https://api.example.com/v1",
-        model: "model-a",
-        contextWindowTokens: 128000,
-        supportsImages: false,
-      },
-      privacyAccepted: true,
-      hasSessionKey: true,
-    });
+  it("starts empty and activates only the first new profile", async () => {
+    await expect(loadPublicSettings()).resolves.toEqual({ profiles: [], activeProviderId: null, config: null, privacyAccepted: false, hasSessionKey: false });
+    const first = await save("A", "key-a");
+    const second = await save("B", "key-b");
+    expect(second.activeProviderId).toBe(first.activeProviderId);
+    expect(second.profiles.map((profile) => profile.name)).toEqual(["A", "B"]);
+    expect(second.profiles.every((profile) => profile.hasSessionKey)).toBe(true);
+    expect(JSON.stringify(second)).not.toContain("key-a");
+    expect(JSON.stringify(second)).not.toContain("apiKey");
   });
 
-  it("normalizes floating-window geometry and strips malformed values", () => {
-    expect(normalizeWindowGeometry({ width: 500.4, height: 640.4, right: 32.4, bottom: 24.4 })).toEqual({ width: 500, height: 640, right: 32, bottom: 24 });
-    expect(normalizeWindowGeometry({ width: 100, height: Infinity, right: -1, bottom: "bad" })).toEqual({ width: 340, height: 560, right: 12, bottom: 20 });
-    expect(normalizeWindowGeometry(null)).toEqual({ width: 420, height: 560, right: 20, bottom: 20 });
+  it("migrates the legacy provider and matching endpoint key once, preserving privacy and UI", async () => {
+    Object.assign(local.data, { "provider-config": { ...config, apiKey: "must-not-leak" }, "provider-api-key": { apiKey: "legacy-secret", providerBaseUrl: config.baseUrl }, "privacy-accepted": true, "panel-width": 700 });
+    const settings = await loadPublicSettings();
+    expect(settings).toMatchObject({ activeProviderId: "legacy-provider", config, privacyAccepted: true, hasSessionKey: true });
+    expect(settings.profiles).toEqual([{ id: "legacy-provider", name: "默认 API", config, hasSessionKey: true }]);
+    await expect(loadInternalSettings()).resolves.toEqual({ config, privacyAccepted: true, apiKey: "legacy-secret" });
+    expect(local.set).toHaveBeenCalledOnce();
+    expect(local.data).not.toHaveProperty("provider-config");
+    expect(local.data).not.toHaveProperty("provider-api-key");
+    expect(local.data["panel-width"]).toBe(700);
+    expect(JSON.stringify(settings)).not.toContain("secret");
+    expect(JSON.stringify(settings)).not.toContain("must-not-leak");
+    expect(local.set.mock.invocationCallOrder[0]).toBeLessThan(local.remove.mock.invocationCallOrder[0]!);
   });
 
-  it("loads saved geometry, or migrates the legacy panel width", async () => {
-    local.data["window-geometry"] = { width: 520, height: 610, right: 34, bottom: 28, ignored: true };
-    await expect(loadUiPreferences()).resolves.toEqual({ windowGeometry: { width: 520, height: 610, right: 34, bottom: 28 } });
-
-    delete local.data["window-geometry"];
-    local.data["panel-width"] = 700;
-    await expect(loadUiPreferences()).resolves.toEqual({ windowGeometry: { width: 700, height: 560, right: 20, bottom: 20 } });
-  });
-
-  it("saves one normalized global floating-window geometry", async () => {
-    await saveWindowGeometry({ width: 510.7, height: 619.6, right: 31.5, bottom: 23.5 });
-    expect(local.data["window-geometry"]).toEqual({ width: 511, height: 620, right: 32, bottom: 24 });
-  });
-
-  it("fails closed for malformed stored provider configuration", async () => {
-    local.data["provider-config"] = { baseUrl: "https://api.example.com", model: " ", contextWindowTokens: 0 };
-
+  it("does not migrate a key bound to another endpoint or an invalid legacy config", async () => {
+    Object.assign(local.data, { "provider-config": config, "provider-api-key": { apiKey: "secret", providerBaseUrl: "https://other.example.com/v1" } });
+    await expect(loadInternalSettings()).resolves.toMatchObject({ config, apiKey: null });
+    delete local.data["provider-profiles"];
+    local.data["provider-config"] = { ...config, model: " " };
     await expect(loadInternalSettings()).resolves.toMatchObject({ config: null, apiKey: null });
   });
 
-  it("strips extra stored configuration fields from public settings", () => {
-    const config = {
-      baseUrl: "https://api.example.com/v1",
-      model: "model-a",
-      contextWindowTokens: 128000,
-      supportsImages: false,
-      apiKey: "must-not-leak",
-    } as unknown as Parameters<typeof publicSettings>[0]["config"];
-
-    expect(publicSettings({ config, privacyAccepted: true, apiKey: null }).config).toEqual({
-      baseUrl: "https://api.example.com/v1",
-      model: "model-a",
-      contextWindowTokens: 128000,
-      supportsImages: false,
-    });
+  it("preserves legacy data when migration cannot save", async () => {
+    local.data["provider-config"] = config;
+    local.data["provider-api-key"] = { apiKey: "secret", providerBaseUrl: config.baseUrl };
+    local.set.mockRejectedValueOnce(new Error("local unavailable"));
+    await expect(loadPublicSettings()).rejects.toThrow("local unavailable");
+    expect(local.data["provider-config"]).toEqual(config);
+    expect(local.data["provider-api-key"]).toBeDefined();
+    expect(local.remove).not.toHaveBeenCalled();
   });
 
-  it("keeps a saved key after extension reload or browser restart clears session storage", async () => {
-    const config = {
-      baseUrl: "https://api.example.com/v1",
-      model: "model-a",
-      contextWindowTokens: 128000,
-      supportsImages: false,
-    };
-    await saveProviderConfig(config, true);
-    await setSessionKey("secret");
+  it("does not revive legacy settings when the new store is malformed or intentionally empty", async () => {
+    local.data["provider-config"] = config;
+    local.data["provider-profiles"] = {};
+    await expect(loadPublicSettings()).rejects.toThrow();
+    local.data["provider-profiles"] = { schemaVersion: 1, profiles: [], activeProviderId: null, privacyAccepted: true };
+    await expect(loadPublicSettings()).resolves.toMatchObject({ profiles: [], activeProviderId: null });
+  });
 
-    session = createStorageMock();
-    Object.assign(chrome.storage, { session });
+  it("isolates different keys for profiles using the same endpoint and survives module reload", async () => {
+    const a = (await save("A", " key-a ")).activeProviderId!;
+    const b = (await save("B", "key-b")).profiles[1]!.id;
+    await selectProviderProfile(b);
+    await expect(loadInternalSettings()).resolves.toEqual({ config, privacyAccepted: true, apiKey: "key-b" });
+    await expect(loadInternalSettings(a)).resolves.toEqual({ config, privacyAccepted: true, apiKey: " key-a " });
     vi.resetModules();
     const reloaded = await import("../src/background/settings");
-
-    await expect(reloaded.loadInternalSettings()).resolves.toEqual({ config, privacyAccepted: true, apiKey: "secret" });
-    expect(reloaded.publicSettings(await reloaded.loadInternalSettings())).toEqual({ config, privacyAccepted: true, hasSessionKey: true });
+    await expect(reloaded.loadInternalSettings()).resolves.toEqual({ config, privacyAccepted: true, apiKey: "key-b" });
   });
 
-  it("forgets the persisted key without removing provider settings or UI preferences", async () => {
-    const config = {
-      baseUrl: "https://api.example.com/v1",
-      model: "model-a",
-      contextWindowTokens: 128000,
-      supportsImages: false,
-    };
-    await saveProviderConfig(config, true);
-    await setSessionKey("secret");
-    await saveWindowGeometry({ width: 500, height: 600, right: 20, bottom: 20 });
+  it("keeps a key for model edits and blank input, but permanently clears it when the full endpoint changes", async () => {
+    const id = (await save("A", "secret")).activeProviderId!;
+    const modelConfig = { ...config, model: "revised" };
+    await saveProviderProfile({ profileId: id, name: "Renamed", config: modelConfig, privacyAccepted: true, apiKey: " " });
+    await expect(loadInternalSettings(id)).resolves.toMatchObject({ config: modelConfig, apiKey: "secret" });
+    await saveProviderProfile({ profileId: id, name: "Renamed", config: { ...config, baseUrl: "https://api.example.com/other/v1" }, privacyAccepted: true });
+    await expect(loadInternalSettings(id)).resolves.toMatchObject({ apiKey: null });
+    await saveProviderProfile({ profileId: id, name: "Renamed", config, privacyAccepted: true });
+    await expect(loadInternalSettings(id)).resolves.toMatchObject({ apiKey: null });
+  });
 
-    await forgetSessionKey();
-    expect(local.data).not.toHaveProperty("provider-api-key");
-    await expect(loadInternalSettings()).resolves.toEqual({ config, privacyAccepted: true, apiKey: null });
+  it("can atomically save a changed endpoint with its new key", async () => {
+    const id = (await save("A", "old")).activeProviderId!;
+    const changed = { ...config, baseUrl: "https://b.example.com/v1" };
+    await saveProviderProfile({ profileId: id, name: "B", config: changed, privacyAccepted: true, apiKey: "new" });
+    await expect(loadInternalSettings()).resolves.toEqual({ config: changed, privacyAccepted: true, apiKey: "new" });
+  });
+
+  it("forgets only the requested profile key and preserves UI and other keys", async () => {
+    const a = (await save("A", "key-a")).activeProviderId!;
+    const b = (await save("B", "key-b")).profiles[1]!.id;
+    await saveWindowGeometry({ width: 500, height: 600, right: 20, bottom: 20 });
+    await forgetSessionKey(a);
+    await expect(loadInternalSettings(a)).resolves.toMatchObject({ config, apiKey: null });
+    await expect(loadInternalSettings(b)).resolves.toMatchObject({ apiKey: "key-b" });
     await expect(loadUiPreferences()).resolves.toEqual({ windowGeometry: { width: 500, height: 600, right: 20, bottom: 20 } });
   });
 
-  it("binds a saved key to its current provider origin", async () => {
-    const providerA = {
-      baseUrl: "https://a.example.com/v1",
-      model: "model-a",
-      contextWindowTokens: 128000,
-      supportsImages: false,
-    };
-    const providerB = { ...providerA, baseUrl: "https://b.example.com/v1" };
-
-    await saveProviderConfig(providerA, true);
-    await setSessionKey(" key-a ");
-    await saveProviderConfig(providerB, true);
-    await expect(loadInternalSettings()).resolves.toMatchObject({ config: providerB, apiKey: null });
-    await setSessionKey("key-b");
-    await expect(loadInternalSettings()).resolves.toMatchObject({ apiKey: "key-b" });
-    expect(local.data["provider-api-key"]).toEqual({ apiKey: "key-b", providerBaseUrl: "https://b.example.com/v1" });
+  it("rejects missing profile IDs instead of silently targeting the active profile", async () => {
+    await save("A", "key-a");
+    await expect(selectProviderProfile("missing")).rejects.toThrow(/不存在/);
+    await expect(deleteProviderProfile("missing")).rejects.toThrow(/不存在/);
+    await expect(loadInternalSettings("missing")).rejects.toThrow(/不存在/);
+    await expect(setSessionKey("secret", "missing")).rejects.toThrow(/不存在/);
+    await expect(forgetSessionKey("missing")).rejects.toThrow(/不存在/);
+    await expect(saveProviderProfile({ profileId: "missing", name: "B", config, privacyAccepted: true })).rejects.toThrow(/不存在/);
+    expect((await loadPublicSettings()).profiles).toHaveLength(1);
   });
 
-  it("binds keys to the complete provider endpoint but not the selected model", async () => {
-    const providerA = {
-      baseUrl: "https://gateway.example.com/provider-a/v1",
-      model: "model-a",
-      contextWindowTokens: 128000,
-      supportsImages: false,
-    };
-    const providerB = { ...providerA, baseUrl: "https://gateway.example.com/provider-b/v1" };
-
-    await saveProviderConfig(providerA, true);
-    await setSessionKey(" key-a ");
-    await saveProviderConfig(providerB, true);
-    await expect(loadInternalSettings()).resolves.toMatchObject({ apiKey: null });
-    await saveProviderConfig({ ...providerA, model: "model-a-revised" }, true);
-    await expect(loadInternalSettings()).resolves.toMatchObject({ apiKey: " key-a " });
+  it("deletes a nonactive profile without switching and selects the first survivor when deleting current", async () => {
+    const a = (await save("A")).activeProviderId!;
+    const b = (await save("B")).profiles[1]!.id;
+    const c = (await save("C")).profiles[2]!.id;
+    expect((await deleteProviderProfile(b)).activeProviderId).toBe(a);
+    expect((await deleteProviderProfile(a)).activeProviderId).toBe(c);
+    await expect(deleteProviderProfile(c)).resolves.toMatchObject({ profiles: [], activeProviderId: null, config: null, hasSessionKey: false });
   });
 
-  it("rejects blank keys and preserves nonblank opaque key input", async () => {
-    await saveProviderConfig({
-      baseUrl: "https://api.example.com/v1",
-      model: "model-a",
-      contextWindowTokens: 128000,
-      supportsImages: false,
-    }, true);
-
-    await expect(setSessionKey(" \t ")).rejects.toThrow(/请.*API 密钥/);
-    await setSessionKey(" secret ");
-    await expect(loadInternalSettings()).resolves.toMatchObject({ apiKey: " secret " });
+  it("serializes simultaneous additions and key changes without losing profiles", async () => {
+    await Promise.all([save("A", "a"), save("B", "b"), save("C", "c")]);
+    const settings = await loadPublicSettings();
+    expect(settings.profiles.map((profile) => profile.name)).toEqual(["A", "B", "C"]);
+    await Promise.all(settings.profiles.map((profile) => setSessionKey(profile.name, profile.id)));
+    expect((await Promise.all(settings.profiles.map((profile) => loadInternalSettings(profile.id)))).map((setting) => setting.apiKey)).toEqual(["A", "B", "C"]);
   });
 
-  it("restricts local storage before saving a key and removes it on request", async () => {
-    const config = {
-      baseUrl: "https://api.example.com/v1",
-      model: "model-a",
-      contextWindowTokens: 128000,
-      supportsImages: false,
-    };
-
-    await restrictStorageAccess();
-    await saveProviderConfig(config, true);
-    await setSessionKey("secret");
-    await forgetSessionKey();
-
+  it("restricts access before writing secrets and refuses to save if restriction fails", async () => {
+    await save("A", "secret");
     expect(local.setAccessLevel).toHaveBeenCalledWith({ accessLevel: "TRUSTED_CONTEXTS" });
-    expect(local.set).toHaveBeenCalledWith({ "provider-config": config, "privacy-accepted": true });
-    expect(local.set).toHaveBeenCalledWith({
-      "provider-api-key": { apiKey: "secret", providerBaseUrl: "https://api.example.com/v1" },
-    });
-    expect(local.remove).toHaveBeenCalledWith("provider-api-key");
-    expect(session.set).not.toHaveBeenCalled();
-  });
-
-  it("does not persist a key if restricting storage access fails", async () => {
-    await saveProviderConfig({
-      baseUrl: "https://api.example.com/v1",
-      model: "model-a",
-      contextWindowTokens: 128000,
-      supportsImages: false,
-    }, true);
+    expect(local.setAccessLevel.mock.invocationCallOrder[0]).toBeLessThan(local.set.mock.invocationCallOrder[0]!);
+    const before = structuredClone(local.data);
     local.setAccessLevel.mockRejectedValueOnce(new Error("access restriction failed"));
-
-    await expect(setSessionKey("secret")).rejects.toThrow("access restriction failed");
-    expect(local.data).not.toHaveProperty("provider-api-key");
+    await expect(save("B", "secret-b")).rejects.toThrow("access restriction failed");
+    expect(local.data).toEqual(before);
   });
 
-  it("propagates storage errors", async () => {
-    local.set.mockRejectedValueOnce(new Error("local unavailable"));
-    await expect(saveProviderConfig({
-      baseUrl: "https://api.example.com",
-      model: "model-a",
-      contextWindowTokens: 128000,
-      supportsImages: false,
-    }, true)).rejects.toThrow("local unavailable");
+  it("validates profile fields and preserves nonblank opaque key input", async () => {
+    await expect(save(" ")).rejects.toThrow(/API 名称/);
+    const id = (await save("A")).activeProviderId!;
+    await expect(setSessionKey(" \t ", id)).rejects.toThrow(/API 密钥/);
+    await setSessionKey(" secret ", id);
+    await expect(loadInternalSettings(id)).resolves.toMatchObject({ apiKey: " secret " });
+    await expect(saveProviderProfile({ name: "B", config: { ...config, contextWindowTokens: 1 }, privacyAccepted: true })).rejects.toThrow(/上下文窗口/);
+  });
+
+  it("normalizes, loads and saves global floating geometry including legacy width", async () => {
+    expect(normalizeWindowGeometry({ width: 500.4, height: 640.4, right: 32.4, bottom: 24.4 })).toEqual({ width: 500, height: 640, right: 32, bottom: 24 });
+    expect(normalizeWindowGeometry({ width: 100, height: Infinity, right: -1, bottom: "bad" })).toEqual({ width: 340, height: 560, right: 12, bottom: 20 });
+    expect(normalizeWindowGeometry(null)).toEqual({ width: 420, height: 560, right: 20, bottom: 20 });
+    local.data["panel-width"] = 700;
+    await expect(loadUiPreferences()).resolves.toEqual({ windowGeometry: { width: 700, height: 560, right: 20, bottom: 20 } });
+    await saveWindowGeometry({ width: 510.7, height: 619.6, right: 31.5, bottom: 23.5 });
+    expect(local.data["window-geometry"]).toEqual({ width: 511, height: 620, right: 32, bottom: 24 });
   });
 });

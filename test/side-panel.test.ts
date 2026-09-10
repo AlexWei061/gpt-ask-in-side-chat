@@ -1,13 +1,107 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SidePanel } from "../src/content/ui/side-panel";
 import { renderMarkdown } from "../src/content/ui/markdown";
-import type { QuoteReference, SideMessage } from "../src/shared/types";
+import type { PublicProviderProfile, QuoteReference, SideMessage } from "../src/shared/types";
 
 const quote: QuoteReference = { text: "selected words", sourceRole: "assistant", sourceMessageIndex: 0 };
 const messages: SideMessage[] = [{ id: "one", role: "assistant", content: "**saved**", status: "incomplete", createdAt: "2026-01-01" }];
+const profiles: PublicProviderProfile[] = [
+  { id: "first", name: "日常", config: { baseUrl: "https://first.example/v1", model: "fast-model", contextWindowTokens: 128000, supportsImages: false }, hasSessionKey: true },
+  { id: "second", name: "推理", config: { baseUrl: "https://second.example/v1", model: "reasoning-model", contextWindowTokens: 200000, supportsImages: true }, hasSessionKey: true },
+];
+const contextSummary = { capturedMessages: 4, endpointOrigin: "https://first.example", model: "fast-model", contextWindowTokens: 128000, approximateTokens: 1200 };
 
 describe("side panel", () => {
   afterEach(() => { document.querySelectorAll("[data-side-chat-host]").forEach((node) => node.remove()); document.body.innerHTML = ""; document.body.style.marginRight = ""; vi.restoreAllMocks(); });
+
+  it("switches API profiles while preserving the draft, quote, compression and scroll position", () => {
+    const onProviderChange = vi.fn(); const onSend = vi.fn();
+    const panel = new SidePanel(document, { onSend, onProviderChange });
+    panel.setConversation("c", []); panel.setProviders(profiles, "first"); panel.open(quote, contextSummary);
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    const select = root.querySelector<HTMLSelectElement>("[data-provider-select]")!;
+    const textarea = root.querySelector<HTMLTextAreaElement>("textarea")!;
+    const compression = root.querySelector<HTMLInputElement>("form input[type=checkbox]")!;
+    const activeQuote = root.querySelector("[data-active-quote]");
+    const log = root.querySelector<HTMLElement>(".messages")!;
+    expect(select.getAttribute("aria-label")).toBe("切换 API 配置");
+    expect(Array.from(select.options, (option) => option.textContent)).toEqual(["日常 · fast-model", "推理 · reasoning-model"]);
+    expect(select.closest("[data-drag-handle]")).toBeNull();
+    textarea.value = "my draft"; textarea.dispatchEvent(new Event("input"));
+    compression.checked = true; log.scrollTop = 25;
+    select.value = "second"; select.dispatchEvent(new Event("change"));
+    expect(onProviderChange).toHaveBeenCalledExactlyOnceWith("second");
+    panel.setContextSummary({ ...contextSummary, endpointOrigin: "https://second.example", model: "reasoning-model" });
+    panel.setProviders(profiles, "second");
+    expect(root.querySelector("[data-provider-select]")).toBe(select);
+    expect(select.value).toBe("second");
+    expect(root.querySelector("textarea")).toBe(textarea);
+    expect(textarea.value).toBe("my draft");
+    expect(root.querySelector("[data-active-quote]")).toBe(activeQuote);
+    expect(compression.checked).toBe(true);
+    expect(log.scrollTop).toBe(25);
+    expect(root.querySelector("[data-context-details]")?.textContent).toContain("目标：https://second.example");
+    expect(root.querySelector("[data-context-details]")?.textContent).toContain("预计词元：1,200 / 128,000");
+    root.querySelector<HTMLFormElement>("form")!.requestSubmit();
+    expect(onSend).toHaveBeenCalledWith({ question: "my draft", quote, compressOldContext: true });
+    panel.destroy();
+  });
+
+  it("keeps API switching available during generation without changing the current destination or attachment consent", async () => {
+    const onProviderChange = vi.fn(); const onStop = vi.fn();
+    const panel = new SidePanel(document, { onSend: vi.fn(), onProviderChange, onStop });
+    panel.setConversation("c", []); panel.setProviders(profiles, "first"); panel.open(quote, contextSummary); panel.setBusy(true);
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    const pendingConsent = panel.confirmAttachments(["notes.txt"]);
+    const dialog = root.querySelector<HTMLDialogElement>("[data-attachment-consent]")!;
+    dialog.querySelector<HTMLInputElement>("input")!.checked = true;
+    const select = root.querySelector<HTMLSelectElement>("[data-provider-select]")!;
+    expect(select.disabled).toBe(false);
+    select.value = "second"; select.dispatchEvent(new Event("change"));
+    panel.setProviders(profiles, "second");
+    panel.setNotice("API 配置已切换。");
+    expect(onProviderChange).toHaveBeenCalledExactlyOnceWith("second");
+    expect(onStop).not.toHaveBeenCalled();
+    expect(root.querySelector("[data-provider-notice]")?.textContent).toContain("下一条消息生效");
+    expect(root.querySelector("[data-context-details]")?.textContent).toContain("目标：https://first.example");
+    expect(root.querySelector("[data-attachment-consent]")).toBe(dialog);
+    expect(root.querySelector<HTMLButtonElement>("[data-action=stop]")?.disabled).toBe(false);
+    expect(root.querySelector(".status")?.textContent).toBe("API 配置已切换。");
+    dialog.querySelector<HTMLButtonElement>("[data-action=confirm-attachments]")!.click();
+    await expect(pendingConsent).resolves.toEqual([0]);
+    panel.destroy();
+  });
+
+  it("applies provider updates without reloading the settings iframe", () => {
+    vi.spyOn(HTMLIFrameElement.prototype, "src", "set").mockImplementation(() => {});
+    const panel = new SidePanel(document, { onSend: vi.fn() });
+    panel.setConversation("c", []); panel.open(quote, contextSummary);
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    root.querySelector<HTMLButtonElement>("[data-action=settings]")!.click();
+    const frame = root.querySelector("iframe");
+    panel.setProviders(profiles, "second");
+    panel.setContextSummary({ ...contextSummary, endpointOrigin: "https://second.example" });
+    expect(root.querySelector("iframe")).toBe(frame);
+    root.querySelector<HTMLButtonElement>("[data-action=settings]")!.click();
+    expect(root.querySelector<HTMLSelectElement>("[data-provider-select]")?.value).toBe("second");
+    expect(root.querySelector("[data-context-details]")?.textContent).toContain("https://second.example");
+    panel.destroy();
+  });
+
+  it("offers a settings entry when no API profiles have been configured", () => {
+    vi.spyOn(HTMLIFrameElement.prototype, "src", "set").mockImplementation(() => {});
+    const panel = new SidePanel(document, { onSend: vi.fn() });
+    panel.open(quote); panel.setProviders([], null);
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    const select = root.querySelector<HTMLSelectElement>("[data-provider-select]")!;
+    const configure = root.querySelector<HTMLButtonElement>("[data-action=configure-provider]")!;
+    expect(select.disabled).toBe(true);
+    expect(select.selectedOptions[0]?.textContent).toBe("尚未配置");
+    expect(configure.hidden).toBe(false);
+    configure.click();
+    expect(root.querySelector("iframe")?.title).toBe("模型与 API 设置");
+    panel.destroy();
+  });
 
   it("starts with an accessible bar and opens an empty conversation without a quote", () => {
     const onSend = vi.fn();

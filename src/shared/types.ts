@@ -7,6 +7,21 @@ export interface ProviderConfig {
   supportsImages: boolean;
 }
 
+export interface PublicProviderProfile {
+  id: string;
+  name: string;
+  config: ProviderConfig;
+  hasSessionKey: boolean;
+}
+
+export interface PublicSettings {
+  profiles: PublicProviderProfile[];
+  activeProviderId: string | null;
+  config: ProviderConfig | null;
+  privacyAccepted: boolean;
+  hasSessionKey: boolean;
+}
+
 export interface WindowGeometry {
   width: number;
   height: number;
@@ -48,6 +63,8 @@ export interface SideChatRecord {
 }
 
 export interface SendPayload {
+  providerId?: string;
+  providerConfig?: ProviderConfig;
   conversationId: string;
   mainMessages: MainMessage[];
   quote?: QuoteReference;

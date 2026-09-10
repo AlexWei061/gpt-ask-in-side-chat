@@ -1,13 +1,11 @@
 // The extension build loads CSS imports as text.
 // @ts-expect-error CSS text has no TypeScript declaration
 import styles from "./styles.css";
-import type { ProviderConfig } from "../shared/types";
-import type { RuntimeResponse } from "../shared/protocol";
+import type { PublicProviderProfile, PublicSettings } from "../shared/types";
+import { isPublicSettings, type RuntimeResponse } from "../shared/protocol";
 import { normalizeProviderConfig } from "../background/settings";
 import { permissionPattern } from "../background/permissions";
 import { followTheme } from "../shared/theme";
-
-type PublicSettings = { config: ProviderConfig | null; privacyAccepted: boolean; hasSessionKey: boolean };
 
 document.head.append(Object.assign(document.createElement("style"), { textContent: styles }));
 if (new URLSearchParams(location.search).get("embedded") === "1") document.documentElement.classList.add("embedded");
@@ -20,10 +18,15 @@ app.innerHTML = `
     <span class="app-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4h10a3 3 0 0 1 3 3v7a3 3 0 0 1-3 3h-5l-5 4v-4a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3Z"/><path d="M8 9h8M8 13h5"/></svg></span>
     <div><h1>侧边对话助手</h1><p>模型与偏好设置</p></div>
   </header>
+  <section class="settings-card profile-picker" aria-labelledby="profiles-title">
+    <div class="profile-heading"><div><h2 id="profiles-title">API 配置</h2><p>保存多个接口，在侧边对话中随时切换。</p></div><button id="add-profile" type="button">新增配置</button></div>
+    <div id="profile-list" class="profile-list"></div>
+  </section>
   <form id="settings">
     <section class="settings-card" aria-labelledby="connection-title">
-      <div class="section-heading"><h2 id="connection-title">模型连接</h2><p>需自备模型接口和 API 密钥，调用可能产生服务商费用。</p></div>
+      <div class="section-heading"><h2 id="connection-title">新增配置</h2><p id="editing-hint">需自备模型接口和 API 密钥，调用可能产生服务商费用。</p></div>
       <div class="fields">
+        <label>配置名称 <input id="profile-name" required maxlength="80" placeholder="例如：日常问答、代码助手"></label>
         <label>接口地址（Base URL） <input id="base-url" type="url" required placeholder="https://provider.example/v1"></label>
         <div class="field-row">
           <label>模型 <input id="model" required></label>
@@ -35,7 +38,7 @@ app.innerHTML = `
       <details class="setup-help"><summary>这些设置怎么填？</summary>
         <p>在你选择的模型服务商控制台创建 API 密钥，并查阅其接口文档。接口需兼容流式 Chat Completions；地址形如 https://provider.example/v1，扩展会追加 /chat/completions。示例地址不可直接使用。</p>
         <p>模型填写服务商提供的模型 ID；上下文窗口填写该模型支持的词元上限，仅在模型支持图片时勾选图片输入。</p>
-        <p>先保存并授权，再测试连接。测试会发送一条简短提示，也可能产生调用费用。API 密钥保存在本机，扩展重新加载或 Chrome 重启后仍保留。</p>
+        <p>先保存并授权，再测试连接。测试会发送一条简短提示，也可能产生调用费用。每个配置的 API 密钥独立保存在本机，扩展重新加载或 Chrome 重启后仍保留。保存已有配置不会切换当前使用的接口。</p>
       </details>
     </section>
     <section class="settings-card disclosure" aria-labelledby="disclosure-title">
@@ -45,26 +48,31 @@ app.innerHTML = `
       <p>测试连接会向同一接口发送固定测试提示；如果你启用旧上下文压缩，超限时还会向该接口发送额外的压缩请求。<a href="privacy.html" target="_blank" rel="noopener">阅读完整隐私政策</a></p>
       <label class="check consent"><input id="privacy" type="checkbox"> 我已了解并同意上述数据使用方式。</label>
     </section>
-    <div class="actions form-actions"><button type="submit">保存并授权接口访问</button><button id="test" type="button">测试连接</button></div>
+    <div class="actions form-actions"><button type="submit">保存并授权接口访问</button><button id="test" type="button" title="测试当前编辑的配置">测试连接</button><button id="delete-profile" class="danger" type="button">删除此配置</button></div>
   </form>
   <section class="settings-card data-controls" aria-labelledby="data-title">
     <h2 id="data-title">本地数据管理</h2>
-    <p>API 密钥保存在本机，扩展重新加载或 Chrome 重启后仍保留，可点击下方按钮移除。侧边对话记录加密保存在当前浏览器本地。</p>
-    <div class="actions"><button id="forget" type="button">忘记已保存的 API 密钥</button><button id="clear" class="danger" type="button">清空全部侧边对话记录</button></div>
+    <p>API 密钥保存在本机，扩展重新加载或 Chrome 重启后仍保留。下方按钮仅移除当前编辑配置的密钥。侧边对话记录加密保存在当前浏览器本地。</p>
+    <div class="actions"><button id="forget" type="button">忘记此配置的 API 密钥</button><button id="clear" class="danger" type="button">清空全部侧边对话记录</button></div>
   </section>
   <p class="usage-hint">配置完成后，刷新已有 ChatGPT 页面，打开一个已保存的对话，选中文字即可提问。首次使用也可点击页面上的「侧边对话」浮条。暂不支持分享页等非 /c/ 路径。</p>
   <p id="status" role="status" aria-live="polite"></p>`;
 
 const form = required<HTMLFormElement>("#settings");
 const privacy = required<HTMLInputElement>("#privacy");
+const profileName = required<HTMLInputElement>("#profile-name");
+const profileList = required<HTMLElement>("#profile-list");
 const baseUrl = required<HTMLInputElement>("#base-url");
 const model = required<HTMLInputElement>("#model");
 const contextWindow = required<HTMLInputElement>("#context-window");
 const images = required<HTMLInputElement>("#images");
 const apiKey = required<HTMLInputElement>("#api-key");
 const status = required<HTMLElement>("#status");
-let hasSessionKey = false;
-let loadedBaseUrl: string | null = null;
+let settings: PublicSettings = { profiles: [], activeProviderId: null, config: null, privacyAccepted: false, hasSessionKey: false };
+let editingId: string | null = null;
+let savedDraft = "";
+let busy = false;
+let refreshPending = false;
 
 function required<T extends Element>(selector: string): T {
   const element = app.querySelector<T>(selector);
@@ -72,12 +80,101 @@ function required<T extends Element>(selector: string): T {
   return element;
 }
 
-function isPublicSettings(value: unknown): value is PublicSettings {
-  if (!value || typeof value !== "object") return false;
-  const settings = value as Partial<PublicSettings>;
-  if (typeof settings.privacyAccepted !== "boolean" || typeof settings.hasSessionKey !== "boolean") return false;
-  if (settings.config === null) return true;
-  try { normalizeProviderConfig(settings.config); return true; } catch { return false; }
+function checkedSettings(value: unknown): PublicSettings {
+  if (!isPublicSettings(value)) throw new Error("无法读取已保存的模型设置。");
+  return value;
+}
+
+function draft(): string {
+  return JSON.stringify([profileName.value, baseUrl.value, model.value, contextWindow.value, images.checked, privacy.checked, apiKey.value]);
+}
+
+function hasUnsavedChanges(): boolean { return draft() !== savedDraft; }
+
+function editedProfile(): PublicProviderProfile | undefined {
+  return settings.profiles.find((profile) => profile.id === editingId);
+}
+
+function renderProfiles(): void {
+  profileList.replaceChildren();
+  if (settings.profiles.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "empty-profiles";
+    empty.textContent = "还没有 API 配置，请在下方添加第一个配置。";
+    profileList.append(empty);
+  }
+  for (const profile of settings.profiles) {
+    const row = document.createElement("div");
+    row.className = "profile-row";
+    row.dataset.profileId = profile.id;
+    row.classList.toggle("is-editing", profile.id === editingId);
+    const details = document.createElement("div");
+    details.className = "profile-details";
+    const heading = document.createElement("div");
+    heading.className = "profile-title";
+    const name = document.createElement("strong");
+    name.textContent = profile.name;
+    heading.append(name);
+    if (profile.id === settings.activeProviderId) {
+      const badge = document.createElement("span");
+      badge.className = "profile-badge";
+      badge.textContent = "使用中";
+      heading.append(badge);
+    }
+    const description = document.createElement("p");
+    description.textContent = `${profile.config.model} · ${profile.hasSessionKey ? new URL(profile.config.baseUrl).host : "未配置密钥"}`;
+    description.title = profile.config.baseUrl;
+    details.append(heading, description);
+    const actions = document.createElement("div");
+    actions.className = "actions profile-actions";
+    const select = document.createElement("button");
+    select.type = "button";
+    select.dataset.action = "select";
+    select.textContent = "使用";
+    select.setAttribute("aria-label", `使用配置 ${profile.name}`);
+    select.disabled = busy || profile.id === settings.activeProviderId;
+    select.addEventListener("click", () => void run(async () => {
+      settings = checkedSettings(await send({ type: "settings:select", profileId: profile.id }));
+      renderProfiles();
+      show(`已切换到「${profile.name}」，后续提问将使用此配置。`);
+    }));
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.dataset.action = "edit";
+    edit.textContent = "编辑";
+    edit.setAttribute("aria-label", `编辑配置 ${profile.name}`);
+    edit.disabled = busy;
+    edit.addEventListener("click", () => {
+      if (editingId === profile.id || !allowDiscard()) return;
+      loadEditor(profile);
+      profileName.focus();
+    });
+    actions.append(select, edit);
+    row.append(details, actions);
+    profileList.append(row);
+  }
+}
+
+function loadEditor(profile?: PublicProviderProfile, clearStatus = true): void {
+  editingId = profile?.id ?? null;
+  profileName.value = profile?.name ?? (settings.profiles.length ? "新配置" : "默认配置");
+  baseUrl.value = profile?.config.baseUrl ?? "";
+  model.value = profile?.config.model ?? "";
+  contextWindow.value = profile ? String(profile.config.contextWindowTokens) : "128000";
+  images.checked = profile?.config.supportsImages ?? false;
+  privacy.checked = settings.privacyAccepted;
+  apiKey.value = "";
+  apiKey.placeholder = profile?.hasSessionKey ? "已设置密钥，留空即可保留" : "请输入 API 密钥";
+  required<HTMLElement>("#connection-title").textContent = profile ? "编辑配置" : "新增配置";
+  required<HTMLElement>("#editing-hint").textContent = profile ? `正在编辑「${profile.name}」。保存不会切换当前使用的配置。` : "首个配置保存后会自动启用；后续新增配置可通过「使用」切换。";
+  savedDraft = draft();
+  if (clearStatus) show("");
+  renderProfiles();
+  setBusy(busy);
+}
+
+function allowDiscard(): boolean {
+  return !hasUnsavedChanges() || (document.defaultView?.confirm("当前配置有未保存的修改，确认放弃并切换编辑吗？") ?? false);
 }
 
 function send<T = undefined>(message: unknown): Promise<T> {
@@ -91,8 +188,15 @@ function send<T = undefined>(message: unknown): Promise<T> {
   }));
 }
 
-function setBusy(busy: boolean): void {
+function setBusy(value: boolean): void {
+  busy = value;
   for (const control of app.querySelectorAll<HTMLInputElement | HTMLButtonElement>("input, button")) control.disabled = busy;
+  required<HTMLButtonElement>("#delete-profile").disabled = busy || !editedProfile();
+  required<HTMLButtonElement>("#forget").disabled = busy || !editedProfile()?.hasSessionKey;
+  for (const row of profileList.querySelectorAll<HTMLElement>(".profile-row")) {
+    const select = row.querySelector<HTMLButtonElement>('[data-action="select"]');
+    if (select) select.disabled = busy || row.dataset.profileId === settings.activeProviderId;
+  }
 }
 
 function show(message: string, kind: "success" | "error" = "success"): void {
@@ -103,58 +207,102 @@ function show(message: string, kind: "success" | "error" = "success"): void {
 async function run(action: () => Promise<void>): Promise<void> {
   setBusy(true);
   try { await action(); } catch (error) { show(error instanceof Error ? error.message : "操作失败。", "error"); }
-  finally { setBusy(false); }
+  finally {
+    while (refreshPending) {
+      refreshPending = false;
+      try { await refreshPublicSettings(); }
+      catch (error) { show(error instanceof Error ? error.message : "无法刷新设置。", "error"); }
+    }
+    setBusy(false);
+  }
 }
 
-async function removeUnusedEndpointPermissions(currentPattern: string): Promise<boolean> {
+async function refreshPublicSettings(): Promise<void> {
+  const preserveDraft = hasUnsavedChanges();
+  settings = checkedSettings(await send({ type: "settings:get" }));
+  const profile = editedProfile();
+  if (!preserveDraft && profile) loadEditor(profile, false);
+  else { renderProfiles(); setBusy(busy); }
+}
+
+async function removeUnusedEndpointPermissions(): Promise<boolean> {
   const permissions = await chrome.permissions.getAll();
-  const staleOrigins = (permissions.origins ?? []).filter((origin) => origin !== currentPattern && origin !== "https://chatgpt.com/*");
+  await refreshPublicSettings();
+  const retainedOrigins = new Set(settings.profiles.map((profile) => permissionPattern(profile.config.baseUrl)));
+  retainedOrigins.add("https://chatgpt.com/*");
+  const staleOrigins = (permissions.origins ?? []).filter((origin) => !retainedOrigins.has(origin));
   const results = await Promise.all(staleOrigins.map((origin) => chrome.permissions.remove({ origins: [origin] })));
   return results.every(Boolean);
 }
 
 async function initialize(): Promise<void> {
-  const settings = await send<PublicSettings>({ type: "settings:get" });
-  if (!isPublicSettings(settings)) throw new Error("无法读取已保存的模型设置。");
-  privacy.checked = settings.privacyAccepted;
-  hasSessionKey = settings.hasSessionKey;
-  if (settings.config) {
-    const config = normalizeProviderConfig(settings.config);
-    baseUrl.value = config.baseUrl; model.value = config.model; contextWindow.value = String(config.contextWindowTokens); images.checked = config.supportsImages;
-    loadedBaseUrl = config.baseUrl;
-  }
-  apiKey.value = "";
-  apiKey.placeholder = hasSessionKey ? "已设置密钥，留空即可保留" : "请输入 API 密钥";
+  settings = checkedSettings(await send({ type: "settings:get" }));
+  loadEditor(settings.profiles.find((profile) => profile.id === settings.activeProviderId));
 }
 
 form.addEventListener("submit", (event) => {
   event.preventDefault();
   void run(async () => {
     if (!privacy.checked) throw new Error("请先阅读并同意使用说明再保存。");
+    const name = profileName.value.trim();
+    if (!name) throw new Error("请输入配置名称。");
     const config = normalizeProviderConfig({ baseUrl: baseUrl.value, model: model.value, contextWindowTokens: Number(contextWindow.value), supportsImages: images.checked });
     const newPattern = permissionPattern(config.baseUrl);
     const granted = await chrome.permissions.request({ origins: [newPattern] });
     if (!granted) throw new Error("未获得接口访问权限。");
-    await send({ type: "settings:save", config, privacyAccepted: true });
     const enteredKey = apiKey.value.trim();
-    if (enteredKey) { await send({ type: "key:set", apiKey: enteredKey }); hasSessionKey = true; apiKey.value = ""; }
-    else if (loadedBaseUrl !== null && loadedBaseUrl !== config.baseUrl) hasSessionKey = false;
-    loadedBaseUrl = config.baseUrl;
-    apiKey.placeholder = hasSessionKey ? "已设置密钥，留空即可保留" : "请输入 API 密钥";
-    const removedOldPermission = await removeUnusedEndpointPermissions(newPattern);
+    settings = checkedSettings(await send({ type: "settings:save", ...(editingId ? { profileId: editingId } : {}), name, config, privacyAccepted: true, ...(enteredKey ? { apiKey: enteredKey } : {}) }));
+    // The background appends a newly created profile before returning the saved list.
+    const savedProfile = editingId ? settings.profiles.find((profile) => profile.id === editingId) : settings.profiles.at(-1);
+    if (!savedProfile) throw new Error("无法读取刚保存的配置，请重新打开设置。");
+    loadEditor(savedProfile);
+    const removedOldPermission = await removeUnusedEndpointPermissions();
     if (!removedOldPermission) show("设置已保存，但无法移除旧接口的访问权限。", "error");
-    else show(hasSessionKey ? "设置已保存，API 密钥会保留在本机。请测试连接，再刷新已有 ChatGPT 页面开始使用。" : "设置已保存。请先输入 API 密钥，再测试连接或提问。");
+    else show(savedProfile.hasSessionKey ? "设置已保存，API 密钥会保留在本机。可测试此配置，通过「使用」切换接口。" : "设置已保存，尚未配置密钥。请先输入 API 密钥，再测试连接或提问。");
   });
 });
 
-required<HTMLButtonElement>("#test").addEventListener("click", () => void run(async () => { await send({ type: "provider:test" }); show("连接成功。"); }));
+required<HTMLButtonElement>("#add-profile").addEventListener("click", () => {
+  if (!allowDiscard()) return;
+  loadEditor();
+  profileName.focus();
+});
+required<HTMLButtonElement>("#test").addEventListener("click", () => void run(async () => {
+  if (!editingId || hasUnsavedChanges()) throw new Error("请先保存当前配置，再测试连接。");
+  const name = editedProfile()?.name;
+  await send({ type: "provider:test", profileId: editingId });
+  show(`「${name}」连接成功。`);
+}));
+required<HTMLButtonElement>("#delete-profile").addEventListener("click", () => {
+  const profile = editedProfile();
+  if (!profile || !(document.defaultView?.confirm(`确认删除「${profile.name}」及其本机保存的 API 密钥吗？${hasUnsavedChanges() ? "未保存的修改也会丢失。" : ""}`) ?? false)) return;
+  void run(async () => {
+    settings = checkedSettings(await send({ type: "settings:delete", profileId: profile.id }));
+    loadEditor(settings.profiles.find((item) => item.id === settings.activeProviderId));
+    const removedOldPermission = await removeUnusedEndpointPermissions();
+    show(removedOldPermission ? `已删除「${profile.name}」。` : "配置已删除，但无法移除旧接口的访问权限。", removedOldPermission ? "success" : "error");
+  });
+});
 required<HTMLButtonElement>("#forget").addEventListener("click", () => {
-  if (!(document.defaultView?.confirm("确认移除本机保存的 API 密钥吗？") ?? true)) return;
-  void run(async () => { await send({ type: "key:forget" }); hasSessionKey = false; apiKey.value = ""; apiKey.placeholder = "请输入 API 密钥"; show("已忘记本机保存的 API 密钥。"); });
+  const profile = editedProfile();
+  if (!profile) return;
+  if (hasUnsavedChanges()) { show("请先保存当前修改，再移除此配置的密钥。", "error"); return; }
+  if (!(document.defaultView?.confirm(`确认移除「${profile.name}」在本机保存的 API 密钥吗？`) ?? false)) return;
+  void run(async () => {
+    settings = checkedSettings(await send({ type: "key:forget", profileId: profile.id }));
+    loadEditor(settings.profiles.find((item) => item.id === profile.id));
+    show(`已忘记「${profile.name}」在本机保存的 API 密钥。`);
+  });
 });
 required<HTMLButtonElement>("#clear").addEventListener("click", () => {
-  if (!(document.defaultView?.confirm("确认删除本地保存的全部侧边对话记录吗？") ?? true)) return;
+  if (!(document.defaultView?.confirm("确认删除本地保存的全部侧边对话记录吗？") ?? false)) return;
   void run(async () => { await send({ type: "history:clear-all" }); show("全部侧边对话记录已清空。"); });
 });
 
-void initialize().catch((error: unknown) => show(error instanceof Error ? error.message : "无法加载设置。", "error"));
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== "local" || !("provider-profiles" in changes)) return;
+  if (busy) refreshPending = true;
+  else void run(refreshPublicSettings);
+});
+
+void run(initialize);

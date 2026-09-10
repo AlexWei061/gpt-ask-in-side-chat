@@ -67,6 +67,20 @@ form { display: grid; gap: 16px; margin: 0 0 24px; }
 .settings-card { padding: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow); }
 .section-heading { margin-bottom: 20px; }
 .section-heading p { margin: 4px 0 0; color: var(--text-secondary); font-size: 13px; }
+.profile-picker { margin-bottom: 16px; }
+.profile-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.profile-heading p, .empty-profiles { margin: 4px 0 0; color: var(--text-secondary); font-size: 13px; }
+.profile-heading button { flex-shrink: 0; }
+.profile-list { display: grid; gap: 9px; }
+.profile-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 10px; }
+.profile-row.is-editing { border-color: var(--accent); background: var(--accent-soft); }
+.profile-details { min-width: 0; }
+.profile-title { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+.profile-title strong { font-size: 13px; overflow-wrap: anywhere; }
+.profile-badge { flex-shrink: 0; padding: 1px 6px; border-radius: 5px; color: var(--accent); background: var(--surface-secondary); font-size: 11px; }
+.profile-details p { margin: 3px 0 0; color: var(--text-secondary); font-size: 12px; }
+.profile-actions { flex-shrink: 0; gap: 6px; }
+.profile-actions button { min-height: 32px; padding: 5px 10px; font-size: 12px; }
 .fields { display: grid; gap: 17px; }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 label { display: grid; gap: 7px; min-width: 0; font-size: 13px; font-weight: 550; }
@@ -107,6 +121,9 @@ button.danger:hover { border-color: var(--danger); background: var(--danger-soft
 .embedded h1 { font-size: 18px; letter-spacing: -.3px; }
 .embedded .page-header p { font-size: 12px; }
 .embedded .settings-card { padding: 17px 15px; border-radius: 13px; }
+.embedded .profile-picker { margin-bottom: 12px; }
+.embedded .profile-row { flex-wrap: wrap; gap: 9px; }
+.embedded .profile-actions { margin-left: auto; }
 .embedded .field-row { grid-template-columns: 1fr; }
 .embedded .section-heading { margin-bottom: 17px; }
 .embedded form { gap: 12px; margin-bottom: 20px; }
@@ -118,6 +135,8 @@ button.danger:hover { border-color: var(--danger); background: var(--danger-soft
   main { width: calc(100% - 32px); margin: 28px auto 40px; }
   .settings-card { padding: 20px; }
   .field-row { grid-template-columns: 1fr; }
+  .profile-row { flex-wrap: wrap; }
+  .profile-actions { margin-left: auto; }
 }
 
 @media (prefers-reduced-motion: reduce) {

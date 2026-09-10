@@ -1,6 +1,7 @@
-import type { ProviderConfig, WindowGeometry } from "../shared/types";
+import type { ProviderConfig, PublicSettings, WindowGeometry } from "../shared/types";
 import { normalizeBaseUrl } from "./permissions";
 
+const PROFILES_KEY = "provider-profiles";
 const CONFIG_KEY = "provider-config";
 const PRIVACY_KEY = "privacy-accepted";
 const API_KEY = "provider-api-key";
@@ -9,10 +10,16 @@ const WINDOW_GEOMETRY_KEY = "window-geometry";
 const MAX_CONTEXT_WINDOW_TOKENS = 10_000_000;
 const DEFAULT_WINDOW_GEOMETRY: WindowGeometry = { width: 420, height: 560, right: 20, bottom: 20 };
 
-type StoredKey = {
-  apiKey: string;
-  providerBaseUrl: string;
-};
+type StoredKey = { apiKey: string; providerBaseUrl: string };
+type StoredProfile = { id: string; name: string; config: ProviderConfig; key: StoredKey | null };
+type StoredSettings = { schemaVersion: 1; profiles: StoredProfile[]; activeProviderId: string | null; privacyAccepted: boolean };
+let settingsTail: Promise<void> = Promise.resolve();
+
+function serializeSettings<T>(action: () => Promise<T>): Promise<T> {
+  const pending = settingsTail.then(action);
+  settingsTail = pending.then(() => undefined, () => undefined);
+  return pending;
+}
 
 export type InternalSettings = {
   config: ProviderConfig | null;
@@ -69,61 +76,150 @@ export async function restrictStorageAccess(): Promise<void> {
   await chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
 }
 
-export async function loadInternalSettings(): Promise<InternalSettings> {
-  const local = await chrome.storage.local.get([CONFIG_KEY, PRIVACY_KEY, API_KEY]);
-  let config: ProviderConfig | null = null;
-  try {
-    config = normalizeProviderConfig(local[CONFIG_KEY]);
-  } catch {
-    config = null;
-  }
+function publicSettings(settings: StoredSettings): PublicSettings {
+  const profiles = settings.profiles.map((profile) => ({
+    id: profile.id,
+    name: profile.name,
+    config: normalizeProviderConfig(profile.config),
+    hasSessionKey: Boolean(readStoredKey(profile.key, profile.config)),
+  }));
+  const active = profiles.find((profile) => profile.id === settings.activeProviderId);
   return {
-    config,
-    privacyAccepted: local[PRIVACY_KEY] === true,
-    apiKey: readStoredKey(local[API_KEY], config),
-  };
-}
-
-export function publicSettings(settings: InternalSettings): {
-  config: ProviderConfig | null;
-  privacyAccepted: boolean;
-  hasSessionKey: boolean;
-} {
-  return {
-    config: settings.config && {
-      baseUrl: settings.config.baseUrl,
-      model: settings.config.model,
-      contextWindowTokens: settings.config.contextWindowTokens,
-      supportsImages: settings.config.supportsImages,
-    },
+    profiles,
+    activeProviderId: active?.id ?? null,
+    config: active?.config ?? null,
     privacyAccepted: settings.privacyAccepted,
-    hasSessionKey: Boolean(settings.apiKey),
+    hasSessionKey: active?.hasSessionKey ?? false,
   };
 }
 
-export async function saveProviderConfig(
-  config: ProviderConfig,
-  privacyAccepted: boolean,
-): Promise<void> {
-  const normalizedConfig = normalizeProviderConfig(config);
-  await chrome.storage.local.set({ [CONFIG_KEY]: normalizedConfig, [PRIVACY_KEY]: privacyAccepted });
+function normalizeStoredSettings(value: unknown): StoredSettings {
+  if (!value || typeof value !== "object") throw new Error("无法读取 API 配置列表。");
+  const stored = value as Partial<StoredSettings>;
+  if (stored.schemaVersion !== 1 || !Array.isArray(stored.profiles) || typeof stored.privacyAccepted !== "boolean") throw new Error("无法读取 API 配置列表。");
+  const profiles = stored.profiles.map((profile) => {
+    if (!profile || typeof profile.id !== "string" || !profile.id.trim() || profile.id.length > 128
+      || typeof profile.name !== "string" || !profile.name.trim() || profile.name.trim().length > 80) throw new Error("API 配置无效。");
+    const config = normalizeProviderConfig(profile.config);
+    const apiKey = readStoredKey(profile.key, config);
+    return { id: profile.id, name: profile.name.trim(), config, key: apiKey === null ? null : { apiKey, providerBaseUrl: config.baseUrl } };
+  });
+  if (new Set(profiles.map((profile) => profile.id)).size !== profiles.length
+    || (profiles.length === 0 ? stored.activeProviderId !== null : !profiles.some((profile) => profile.id === stored.activeProviderId))) throw new Error("当前 API 配置无效。");
+  return { schemaVersion: 1, profiles, activeProviderId: stored.activeProviderId ?? null, privacyAccepted: stored.privacyAccepted };
 }
 
-export async function setSessionKey(apiKey: string): Promise<void> {
-  const trimmedKey = apiKey.trim();
-  if (!trimmedKey) {
-    throw new Error("请输入 API 密钥。");
+async function readSettings(): Promise<StoredSettings> {
+  const local = await chrome.storage.local.get([PROFILES_KEY, CONFIG_KEY, PRIVACY_KEY, API_KEY]);
+  if (local[PROFILES_KEY] !== undefined) return normalizeStoredSettings(local[PROFILES_KEY]);
+  let config: ProviderConfig | null = null;
+  try { config = normalizeProviderConfig(local[CONFIG_KEY]); } catch { /* legacy configuration can be incomplete */ }
+  const apiKey = readStoredKey(local[API_KEY], config);
+  const settings: StoredSettings = {
+    schemaVersion: 1,
+    profiles: config ? [{ id: "legacy-provider", name: "默认 API", config, key: apiKey === null ? null : { apiKey, providerBaseUrl: config.baseUrl } }] : [],
+    activeProviderId: config ? "legacy-provider" : null,
+    privacyAccepted: local[PRIVACY_KEY] === true,
+  };
+  if (config) {
+    await writeSettings(settings);
+    await chrome.storage.local.remove([CONFIG_KEY, PRIVACY_KEY, API_KEY]);
   }
-  const local = await chrome.storage.local.get(CONFIG_KEY);
-  const config = normalizeProviderConfig(local[CONFIG_KEY]);
+  return settings;
+}
+
+async function writeSettings(settings: StoredSettings): Promise<void> {
   await restrictStorageAccess();
-  await chrome.storage.local.set({
-    [API_KEY]: { apiKey, providerBaseUrl: config.baseUrl },
+  await chrome.storage.local.set({ [PROFILES_KEY]: settings });
+}
+
+function findProfile(settings: StoredSettings, profileId?: string): StoredProfile | undefined {
+  const profile = settings.profiles.find((candidate) => candidate.id === (profileId ?? settings.activeProviderId));
+  if (profileId !== undefined && !profile) throw new Error("该 API 配置已不存在，请重新选择。");
+  return profile;
+}
+
+export function loadPublicSettings(): Promise<PublicSettings> {
+  return serializeSettings(async () => publicSettings(await readSettings()));
+}
+
+export function loadInternalSettings(profileId?: string): Promise<InternalSettings> {
+  return serializeSettings(async () => {
+    const settings = await readSettings();
+    const profile = findProfile(settings, profileId);
+    return { config: profile?.config ?? null, privacyAccepted: settings.privacyAccepted, apiKey: profile ? readStoredKey(profile.key, profile.config) : null };
   });
 }
 
-export async function forgetSessionKey(): Promise<void> {
-  await chrome.storage.local.remove(API_KEY);
+export function saveProviderProfile(input: {
+  profileId?: string;
+  name: string;
+  config: ProviderConfig;
+  privacyAccepted: boolean;
+  apiKey?: string;
+}): Promise<PublicSettings> {
+  return serializeSettings(async () => {
+    const config = normalizeProviderConfig(input.config);
+    const name = input.name.trim();
+    if (!name || name.length > 80) throw new Error("请输入 1 到 80 个字符的 API 名称。");
+    const settings = await readSettings();
+    let profile = input.profileId === undefined ? undefined : findProfile(settings, input.profileId);
+    const apiKey = input.apiKey?.trim() ? input.apiKey : null;
+    if (profile) {
+      if (profile.config.baseUrl !== config.baseUrl) profile.key = null;
+      profile.name = name;
+      profile.config = config;
+    } else {
+      profile = { id: crypto.randomUUID(), name, config, key: null };
+      settings.profiles.push(profile);
+      if (settings.activeProviderId === null) settings.activeProviderId = profile.id;
+    }
+    if (apiKey !== null) profile.key = { apiKey, providerBaseUrl: config.baseUrl };
+    settings.privacyAccepted = input.privacyAccepted;
+    await writeSettings(settings);
+    return publicSettings(settings);
+  });
+}
+
+export function selectProviderProfile(profileId: string): Promise<PublicSettings> {
+  return serializeSettings(async () => {
+    const settings = await readSettings();
+    findProfile(settings, profileId);
+    settings.activeProviderId = profileId;
+    await writeSettings(settings);
+    return publicSettings(settings);
+  });
+}
+
+export function deleteProviderProfile(profileId: string): Promise<PublicSettings> {
+  return serializeSettings(async () => {
+    const settings = await readSettings();
+    findProfile(settings, profileId);
+    settings.profiles = settings.profiles.filter((profile) => profile.id !== profileId);
+    if (settings.activeProviderId === profileId) settings.activeProviderId = settings.profiles[0]?.id ?? null;
+    await writeSettings(settings);
+    return publicSettings(settings);
+  });
+}
+
+export function setSessionKey(apiKey: string, profileId: string): Promise<PublicSettings> {
+  return serializeSettings(async () => {
+    if (!apiKey.trim()) throw new Error("请输入 API 密钥。");
+    const settings = await readSettings();
+    const profile = findProfile(settings, profileId)!;
+    profile.key = { apiKey, providerBaseUrl: profile.config.baseUrl };
+    await writeSettings(settings);
+    return publicSettings(settings);
+  });
+}
+
+export function forgetSessionKey(profileId: string): Promise<PublicSettings> {
+  return serializeSettings(async () => {
+    const settings = await readSettings();
+    findProfile(settings, profileId)!.key = null;
+    await writeSettings(settings);
+    return publicSettings(settings);
+  });
 }
 
 function normalizedNumber(value: unknown, fallback: number, minimum: number): number {

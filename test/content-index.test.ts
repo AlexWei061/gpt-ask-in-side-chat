@@ -1,4 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PublicSettings } from "../src/shared/types";
+
+const profiles = [
+  { id: "api-a", name: "日常使用", config: { baseUrl: "https://a.example.com/v1", model: "model-a", contextWindowTokens: 128000, supportsImages: false }, hasSessionKey: true },
+  { id: "api-b", name: "深度思考", config: { baseUrl: "https://b.example.com/v1", model: "model-b", contextWindowTokens: 64000, supportsImages: true }, hasSessionKey: true },
+];
+function savedSettings(activeProviderId = "api-a", privacyAccepted = true): PublicSettings {
+  return { profiles, activeProviderId, privacyAccepted, config: profiles.find((profile) => profile.id === activeProviderId)!.config, hasSessionKey: true };
+}
 
 class FakePort {
   readonly onMessage = { addListener: (listener: (value: unknown) => void) => this.messages.push(listener) };
@@ -54,11 +63,15 @@ async function approveAllAttachments(root: ShadowRoot): Promise<void> {
 
 describe("content bootstrap", () => {
   let ports: FakePort[]; let historyRecords = new Map<string, unknown>(); let privacy = false;
+  let currentSettings: PublicSettings;
+  let settingsListeners: Set<(message: unknown) => void>;
   beforeEach(() => {
-    ports = []; historyRecords = new Map(); privacy = false; window.history.replaceState({}, "", "/"); document.body.innerHTML = ""; document.querySelectorAll("[data-side-chat-host]").forEach((node) => node.remove());
+    ports = []; historyRecords = new Map(); privacy = false; currentSettings = savedSettings(); settingsListeners = new Set(); window.history.replaceState({}, "", "/"); document.body.innerHTML = ""; document.querySelectorAll("[data-side-chat-host]").forEach((node) => node.remove());
     Object.defineProperty(globalThis, "chrome", { configurable: true, value: { runtime: {
-      sendMessage: (message: { type: string; conversationId?: string }, callback: (response: unknown) => void) => {
-        if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: privacy, config: null } });
+      onMessage: { addListener: (listener: (message: unknown) => void) => settingsListeners.add(listener), removeListener: (listener: (message: unknown) => void) => settingsListeners.delete(listener) },
+      sendMessage: (message: { type: string; conversationId?: string; profileId?: string }, callback: (response: unknown) => void) => {
+        if (message.type === "settings:get") callback({ ok: true, value: { ...currentSettings, privacyAccepted: privacy } });
+        else if (message.type === "settings:select") { currentSettings = savedSettings(message.profileId, privacy); callback({ ok: true, value: currentSettings }); }
         else if (message.type === "ui:get") callback({ ok: true, value: { windowGeometry: { width: 420, height: 560, right: 20, bottom: 20 } } });
         else if (message.type === "history:load") callback({ ok: true, value: historyRecords.get(message.conversationId!) ?? null });
         else callback({ ok: true });
@@ -71,6 +84,129 @@ describe("content bootstrap", () => {
     await import("../src/content/index");
     await Promise.resolve();
     expect(document.querySelector("[data-side-chat-host]")).toBeNull();
+  });
+
+  it("switches the next send while retaining the draft, quote, and compression choice", async () => {
+    privacy = true; window.history.pushState({}, "", "/c/switch"); installSelectableMessage();
+    const { bootstrapPromise } = await import("../src/content/index"); await bootstrapPromise;
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    root.querySelector<HTMLButtonElement>("[data-minimized-bar]")!.click();
+    const range = document.createRange(); range.selectNodeContents(document.querySelector("#quote")!);
+    document.getSelection()?.addRange(range); document.dispatchEvent(new Event("selectionchange"));
+    const input = root.querySelector<HTMLTextAreaElement>("textarea")!;
+    input.value = "keep my draft"; input.dispatchEvent(new Event("input"));
+    root.querySelector<HTMLInputElement>(".controls input")!.checked = true;
+    const picker = root.querySelector<HTMLSelectElement>("[data-provider-select]")!;
+    picker.value = "api-b"; picker.dispatchEvent(new Event("change"));
+    await vi.waitFor(() => expect(root.querySelector(".context-summary")?.textContent).toContain("https://b.example.com"));
+    expect(root.querySelector("textarea")).toBe(input);
+    expect(input.value).toBe("keep my draft");
+    expect(root.querySelector("[data-active-quote]")?.textContent).toContain("alpha");
+    expect(root.querySelector<HTMLInputElement>(".controls input")!.checked).toBe(true);
+    root.querySelector<HTMLFormElement>("form")!.requestSubmit();
+    await vi.waitFor(() => expect(ports).toHaveLength(1));
+    expect(ports[0]!.sent[0]).toMatchObject({ payload: { providerId: "api-b", providerConfig: profiles[1]!.config, question: "keep my draft", compressOldContext: true } });
+  });
+
+  it("updates the shared selection during a stream without redirecting or interrupting it", async () => {
+    privacy = true; window.history.pushState({}, "", "/c/switch-stream"); installSelectableMessage();
+    const { bootstrapPromise } = await import("../src/content/index"); await bootstrapPromise;
+    const root = openAndSubmit("first question");
+    const first = ports[0]!;
+    const start = first.sent[0] as { requestId: string };
+    first.emit({ type: "accepted", requestId: start.requestId, approximateTokens: 20 });
+    first.emit({ type: "delta", requestId: start.requestId, text: "partial from A" });
+    currentSettings = savedSettings("api-b");
+    settingsListeners.forEach((listener) => listener({ type: "settings:changed" }));
+    await vi.waitFor(() => expect(root.querySelector<HTMLSelectElement>("[data-provider-select]")!.value).toBe("api-b"));
+    expect(root.querySelector(".context-summary")?.textContent).toContain("https://a.example.com");
+    expect(root.textContent).toContain("partial from A");
+    expect(first.disconnectCount).toBe(0);
+    expect(first.sent).toHaveLength(1);
+    first.emit({ type: "done", requestId: start.requestId, record: sideRecord("switch-stream", "answer from A") });
+    expect(root.querySelector(".context-summary")?.textContent).toContain("https://b.example.com");
+    openAndSubmit("second question");
+    expect(ports[1]!.sent[0]).toMatchObject({ payload: { providerId: "api-b" } });
+    expect(root.textContent).toContain("answer from A");
+  });
+
+  it("keeps the chosen endpoint and consent dialog when another page switches API during attachment approval", async () => {
+    privacy = true; window.history.pushState({}, "", "/c/switch-consent");
+    document.body.innerHTML = `<main><article data-message-author-role="assistant"><p id="quote">alpha</p><a download="one.txt" href="https://files.example/one">one.txt</a></article></main>`;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(new Blob(["approved"], { type: "text/plain" }), { status: 200 })));
+    const { bootstrapPromise } = await import("../src/content/index"); await bootstrapPromise;
+    const root = openAndSubmit("with attachment");
+    const dialog = root.querySelector<HTMLDialogElement>("[data-attachment-consent]")!;
+    expect(dialog).toBeTruthy();
+    dialog.querySelector<HTMLInputElement>("input")!.checked = true;
+    currentSettings = savedSettings("api-b");
+    settingsListeners.forEach((listener) => listener({ type: "settings:changed" }));
+    await vi.waitFor(() => expect(root.querySelector<HTMLSelectElement>("[data-provider-select]")!.value).toBe("api-b"));
+    expect(root.querySelector("[data-attachment-consent]")).toBe(dialog);
+    expect(dialog.textContent).toContain("https://a.example.com");
+    expect(dialog.querySelector<HTMLInputElement>("input")!.checked).toBe(true);
+    dialog.querySelector<HTMLButtonElement>("[data-action=confirm-attachments]")!.click();
+    await vi.waitFor(() => expect(ports).toHaveLength(1));
+    expect(ports[0]!.sent[0]).toMatchObject({ payload: { providerId: "api-a", providerConfig: profiles[0]!.config, attachments: [{ text: "approved" }] } });
+  });
+
+  it("waits for a pending switch before sending and removes change listeners on teardown", async () => {
+    privacy = true; window.history.pushState({}, "", "/c/pending-switch"); installSelectableMessage();
+    const original = chrome.runtime.sendMessage;
+    let completeSwitch!: (response: unknown) => void;
+    chrome.runtime.sendMessage = ((message: { type: string }, callback: (response: unknown) => void) => {
+      if (message.type === "settings:select") completeSwitch = callback;
+      else original(message, callback);
+    }) as typeof chrome.runtime.sendMessage;
+    const { bootstrapPromise } = await import("../src/content/index"); await bootstrapPromise;
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    root.querySelector<HTMLButtonElement>("[data-minimized-bar]")!.click();
+    const picker = root.querySelector<HTMLSelectElement>("[data-provider-select]")!;
+    picker.value = "api-b"; picker.dispatchEvent(new Event("change"));
+    openAndSubmit("after switch");
+    await vi.waitFor(() => expect(completeSwitch).toBeTypeOf("function"));
+    expect(ports).toHaveLength(0);
+    completeSwitch({ ok: true, value: savedSettings("api-b") });
+    await vi.waitFor(() => expect(ports).toHaveLength(1));
+    expect(ports[0]!.sent[0]).toMatchObject({ payload: { providerId: "api-b" } });
+    expect(settingsListeners.size).toBe(1);
+    window.dispatchEvent(new Event("pagehide"));
+    expect(settingsListeners.size).toBe(0);
+  });
+
+  it("blocks a send when all API configurations have been deleted", async () => {
+    privacy = true; window.history.pushState({}, "", "/c/no-api"); installSelectableMessage();
+    currentSettings = { profiles: [], activeProviderId: null, config: null, privacyAccepted: true, hasSessionKey: false };
+    const { bootstrapPromise } = await import("../src/content/index"); await bootstrapPromise;
+    const root = openAndSubmit("question");
+    expect(ports).toHaveLength(0);
+    expect(root.textContent).toContain("添加并选择 API 配置");
+    expect(root.querySelector<HTMLTextAreaElement>("textarea")!.disabled).toBe(false);
+  });
+
+  it("does not send to the old API when a switch fails while submission is waiting", async () => {
+    privacy = true; window.history.pushState({}, "", "/c/failed-switch"); installSelectableMessage();
+    const original = chrome.runtime.sendMessage;
+    let completeSwitch!: (response: unknown) => void;
+    chrome.runtime.sendMessage = ((message: { type: string }, callback: (response: unknown) => void) => {
+      if (message.type === "settings:select") completeSwitch = callback;
+      else original(message, callback);
+    }) as typeof chrome.runtime.sendMessage;
+    const { bootstrapPromise } = await import("../src/content/index"); await bootstrapPromise;
+    const root = document.querySelector<HTMLElement>("[data-side-chat-host]")!.shadowRoot!;
+    root.querySelector<HTMLButtonElement>("[data-minimized-bar]")!.click();
+    const picker = root.querySelector<HTMLSelectElement>("[data-provider-select]")!;
+    picker.value = "api-b"; picker.dispatchEvent(new Event("change"));
+    openAndSubmit("only send after switching");
+    await vi.waitFor(() => expect(completeSwitch).toBeTypeOf("function"));
+    completeSwitch({ ok: false, error: { code: "STORAGE_FAILED", message: "save failed" } });
+    await vi.waitFor(() => expect(root.querySelector<HTMLTextAreaElement>("textarea")!.disabled).toBe(false));
+    expect(ports).toHaveLength(0);
+    expect(root.textContent).toContain("本次问题未发送");
+    expect(root.textContent).toContain("only send after switching");
+    expect(root.querySelector<HTMLSelectElement>("[data-provider-select]")!.value).toBe("api-a");
+    root.querySelector<HTMLButtonElement>("[data-action=retry]")!.click();
+    expect(ports[0]!.sent[0]).toMatchObject({ payload: { providerId: "api-a", question: "only send after switching" } });
   });
 
   it("shows an empty bar on the new-chat page and captures selections directly after opening", async () => {
@@ -124,7 +260,7 @@ describe("content bootstrap", () => {
   it("settles safely for malformed UI and history values", async () => {
     privacy = true;
     (chrome.runtime.sendMessage as unknown as (message: { type: string }, callback: (response: unknown) => void) => void) = (message, callback) => {
-      if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: true, config: null } }); else if (message.type === "ui:get") callback({ ok: true, value: { windowGeometry: { width: "bad", height: 560, right: 20, bottom: 20 } } }); else if (message.type === "history:load") callback({ ok: true, value: { schemaVersion: 1, conversationId: "wrong", updatedAt: "", messages: [] } }); else callback({ ok: false, error: { code: "NETWORK_FAILED", message: "x", retryable: "bad" } });
+      if (message.type === "settings:get") callback({ ok: true, value: savedSettings() }); else if (message.type === "ui:get") callback({ ok: true, value: { windowGeometry: { width: "bad", height: 560, right: 20, bottom: 20 } } }); else if (message.type === "history:load") callback({ ok: true, value: { schemaVersion: 1, conversationId: "wrong", updatedAt: "", messages: [] } }); else callback({ ok: false, error: { code: "NETWORK_FAILED", message: "x", retryable: "bad" } });
     };
     window.history.pushState({}, "", "/c/value"); const { bootstrapPromise } = await import("../src/content/index"); await bootstrapPromise;
     expect(document.querySelector("[data-side-chat-host]")).toBeTruthy(); expect(document.querySelector("[data-side-chat-host]")?.shadowRoot?.textContent).not.toContain("wrong");
@@ -146,7 +282,7 @@ describe("content bootstrap", () => {
     const sent: unknown[] = [];
     (chrome.runtime.sendMessage as unknown as (message: { type: string; conversationId?: string }, callback: (response: unknown) => void) => void) = (message, callback) => {
       sent.push(message);
-      if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: true, config: null } });
+      if (message.type === "settings:get") callback({ ok: true, value: savedSettings() });
       else if (message.type === "ui:get") callback({ ok: true, value: { windowGeometry: { width: 420, height: 560, right: 20, bottom: 20 } } });
       else if (message.type === "history:load") callback({ ok: true, value: null });
       else callback({ ok: true });
@@ -343,7 +479,7 @@ describe("content bootstrap", () => {
     privacy = true; window.history.pushState({}, "", "/c/clear");
     let clearCompleted = false;
     (chrome.runtime.sendMessage as unknown as (message: { type: string; conversationId?: string }, callback: (response: unknown) => void) => void) = (message, callback) => {
-      if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: true, config: null } }); else if (message.type === "ui:get") callback({ ok: true, value: { windowGeometry: { width: 420, height: 560, right: 20, bottom: 20 } } }); else if (message.type === "history:load") callback({ ok: true, value: null }); else if (message.type === "history:clear") { clearCompleted = true; callback({ ok: true }); } else callback({ ok: true });
+      if (message.type === "settings:get") callback({ ok: true, value: savedSettings() }); else if (message.type === "ui:get") callback({ ok: true, value: { windowGeometry: { width: 420, height: 560, right: 20, bottom: 20 } } }); else if (message.type === "history:load") callback({ ok: true, value: null }); else if (message.type === "history:clear") { clearCompleted = true; callback({ ok: true }); } else callback({ ok: true });
     };
     document.body.innerHTML = `<main><article data-message-author-role="assistant"><p id="quote">alpha</p></article></main>`; vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => { callback(0); return 1; }); Object.defineProperty(window, "confirm", { configurable: true, value: () => true });
     const { bootstrapPromise } = await import("../src/content/index"); await bootstrapPromise;
@@ -358,7 +494,7 @@ describe("content bootstrap", () => {
     privacy = true; window.history.pushState({}, "", "/c/old");
     let oldCallback: ((response: unknown) => void) | undefined;
     (chrome.runtime.sendMessage as unknown as (message: { type: string; conversationId?: string }, callback: (response: unknown) => void) => void) = (message, callback) => {
-      if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: true, config: null } });
+      if (message.type === "settings:get") callback({ ok: true, value: savedSettings() });
       else if (message.type === "ui:get") callback({ ok: true, value: { windowGeometry: { width: 420, height: 560, right: 20, bottom: 20 } } });
       else if (message.type === "history:load" && message.conversationId === "old") oldCallback = callback;
       else if (message.type === "history:load") callback({ ok: true, value: { schemaVersion: 1, conversationId: "new", updatedAt: "", messages: [{ id: "new", role: "assistant", content: "NEW", status: "complete", createdAt: "" }] } }); else callback({ ok: true });
@@ -379,7 +515,7 @@ describe("content bootstrap", () => {
     installSelectableMessage();
     let loadCallback: ((response: unknown) => void) | undefined;
     (chrome.runtime.sendMessage as unknown as (message: { type: string }, callback: (response: unknown) => void) => void) = (message, callback) => {
-      if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: true, config: null } });
+      if (message.type === "settings:get") callback({ ok: true, value: savedSettings() });
       else if (message.type === "ui:get") callback({ ok: true, value: { windowGeometry: { width: 420, height: 560, right: 20, bottom: 20 } } });
       else if (message.type === "history:load") loadCallback = callback;
       else callback({ ok: true });
@@ -404,7 +540,7 @@ describe("content bootstrap", () => {
     Object.defineProperty(window, "confirm", { configurable: true, value: () => true });
     let loadCallback: ((response: unknown) => void) | undefined;
     (chrome.runtime.sendMessage as unknown as (message: { type: string }, callback: (response: unknown) => void) => void) = (message, callback) => {
-      if (message.type === "settings:get") callback({ ok: true, value: { privacyAccepted: true, config: null } });
+      if (message.type === "settings:get") callback({ ok: true, value: savedSettings() });
       else if (message.type === "ui:get") callback({ ok: true, value: { windowGeometry: { width: 420, height: 560, right: 20, bottom: 20 } } });
       else if (message.type === "history:load") loadCallback = callback;
       else callback({ ok: true });
